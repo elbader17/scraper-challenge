@@ -227,6 +227,8 @@ variable cost. Check Instagram's Terms of Use before scaling to thousands.
 3. **Before scaling to thousands:** measure sustained 429 over a run of ~200 tags. That
    number decides whether proxy rotation is needed.
 
-And meanwhile, **bugs 1 and 2 in `ARCHITECTURE.md`** (image retry and the epoch in the
-embed scraper) are still unfixed. The first is the urgent one: it loses images
-irreversibly.
+**Update:** the two bugs that were open when this document was written — the image
+retry bypass in `ig_google_scraper.py` and the ~340-day-off epoch in
+`ig_embed_scraper.py` — were **fixed on 2026-10-12**, along with three others and a
+fifth bug found while fixing them (numeric IDs arriving as strings, which silently
+nulled `media_id` on every live post). See §5 of `ARCHITECTURE.md`.

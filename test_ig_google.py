@@ -259,6 +259,200 @@ check("--overwrite re-descarga",
       G.download_image(_ImgClient(webp), out_i, p_webp, True))
 
 # --------------------------------------------------------------------------- #
+print("\n== BUG 1: los reintentos deben aplicarse a la descarga de imagen ==")
+# --------------------------------------------------------------------------- #
+# The missing test that let the bug through: `download_image` caught the
+# `FetchError` and returned False, so the `with_retries` wrapping it saw a "success"
+# and NEVER retried. On a transient 429 the image was lost permanently, because the
+# post stayed `ok` and neither --retry-failed nor --resume recovers it (`pending()`
+# excludes `ok`).
+# The client mimics what the CDN does: two 429s and then a valid image.
+
+
+class _FlakyImgClient:
+    """Fails `fail_times` times with 429 and then returns a valid JPEG."""
+
+    def __init__(self, fail_times, data=None):
+        self.fail_times = fail_times
+        self.data = data if data is not None else (b"\xff\xd8\xff\xe0" + b"\x00" * 2000)
+        self.calls = 0
+
+    def get_bytes(self, url):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise G.RateLimitedError("HTTP 429", 0.01)
+        return self.data
+
+    def get_text(self, *a, **k):
+        return 200, ""
+
+    def close(self):
+        pass
+
+
+out_r = Path(tempfile.mkdtemp(prefix="igretry-"))
+p_ret = InstagramPost(shortcode="RETRY11111", source_serp_url="u",
+                      scraped_at=_dt.now(_tz.utc), image_url="http://cdn/x.jpg")
+
+_flaky = _FlakyImgClient(2)
+_saved = G.with_retries(
+    lambda: G.download_image(_flaky, out_r, p_ret, False),
+    attempts=3, base_delay=0.01, max_delay=0.05)
+check("reintenta y RECUPERA la imagen tras un 429 transitorio",
+      _flaky.calls == 3 and _saved and (out_r / "RETRY11111.jpg").exists(),
+      f"calls={_flaky.calls} saved={_saved} "
+      f"archivos={[f.name for f in out_r.iterdir()]}")
+check("la imagen recuperada tiene contenido real",
+      p_ret.local_image_path and Path(p_ret.local_image_path).stat().st_size > 1024,
+      f"ruta={p_ret.local_image_path}")
+
+_flaky2 = _FlakyImgClient(5)  # nunca se recupera
+_raised = None
+try:
+    G.with_retries(lambda: G.download_image(_flaky2, out_r, p_ret, False),
+                   attempts=3, base_delay=0.01, max_delay=0.05)
+except G.FetchError as _e:
+    _raised = _e
+check("si nunca se recupera, PROPAGA el error tras agotar los intentos",
+      _raised is not None and _flaky2.calls == 3,
+      f"calls={_flaky2.calls} exc={_raised!r}")
+
+# A 404 must never be retried: it is terminal by definition.
+class _NotFoundImg:
+    def __init__(self):
+        self.calls = 0
+
+    def get_bytes(self, url):
+        self.calls += 1
+        raise G.NotFoundError("404 en " + url)
+
+
+_nf_img = _NotFoundImg()
+try:
+    G.with_retries(lambda: G.download_image(_nf_img, out_r, p_ret, False),
+                   attempts=3, base_delay=0.01, max_delay=0.05)
+except G.NotFoundError:
+    pass
+check("404 en la imagen NO se reintenta", _nf_img.calls == 1,
+      f"called {_nf_img.calls} times")
+
+# A tiny response or an unknown format are transient CDN failures, so they must
+# propagate for the retry to be able to help; they must not come back as False.
+_small = _FlakyImgClient(0, data=b"\x00" * 10)
+_propagated = False
+try:
+    G.download_image(_small, out_r, p_ret, False)
+except G.FetchError:
+    _propagated = True
+check("respuesta sospechosamente chica propaga FetchError (es transitorio)",
+      _propagated)
+
+_bin = _FlakyImgClient(0, data=b"<?xml version='1.0'?>" + b"\x00" * 2000)
+_propagated2 = False
+try:
+    G.download_image(_bin, out_r, p_ret, False)
+except G.FetchError:
+    _propagated2 = True
+check("formato desconocido propaga FetchError en vez de perder la imagen",
+      _propagated2)
+
+# --------------------------------------------------------------------------- #
+print("\n== BUG 2 (parte A): epoch del snowflake ==")
+# --------------------------------------------------------------------------- #
+import ig_embed_scraper as _emb
+
+check("ambos scripts usan el MISMO epoch",
+      _emb.MEDIA_ID_EPOCH_MS == G.IG_ID_EPOCH_MS,
+      f"embed={_emb.MEDIA_ID_EPOCH_MS} google={G.IG_ID_EPOCH_MS}")
+check("the epoch is NOT the ~340-days-lower value it used to be",
+      _emb.MEDIA_ID_EPOCH_MS != 1284870074250)
+check("decode del shortcode reproduce el id oficial del blob real",
+      _emb.shortcode_to_media_id("DN292ZY3K4y") == 3708423362135764530,
+      f"obtuvo {_emb.shortcode_to_media_id('DN292ZY3K4y')}")
+check("infer_published_at ahora da 2025-08-27 (no 2024-09-21)",
+      (_emb.infer_published_at("DN292ZY3K4y") or "").startswith("2025-08-27"),
+      f"obtuvo {_emb.infer_published_at('DN292ZY3K4y')}")
+
+# --------------------------------------------------------------------------- #
+print("\n== BUG 2 (part B) + undocumented bug: numeric ids arriving as STRING ==")
+# --------------------------------------------------------------------------- #
+# Instagram ahora sirve `id` y `owner.id` como cadenas entrecomilladas, no como
+# JSON numbers. The strict `isinstance(x, int)` checks discarded them silently:
+# `media_id` and `author_id` were NULL on EVERY live post despite
+# `rich_metadata=1`. Found while validating the epoch against a live embed.
+_sm = {
+    "gql_data": {"shortcode_media": {
+        "id": "3978685437899244498",           # string, no int
+        "shortcode": "Dc3IVNnAQPS",
+        "owner": {"id": "123456", "username": "ana", "is_verified": False,
+                  "edge_followed_by": {"count": 8684}},
+        "edge_liked_by": {"count": 394},       # sigue siendo int
+        "edge_media_to_comment": {"count": 8},
+        "dimensions": {"width": "1080", "height": "1350"},  # strings
+        "display_resources": [],
+        "edge_sidecar_to_children": {"edges": []},
+    }}}
+_m = G.parse_gql_media(_sm)
+check("media_id se parsea aunque venga como string",
+      _m["media_id"] == 3978685437899244498, f"obtuvo {_m['media_id']!r}")
+check("author_id se parsea aunque venga como string",
+      _m["author_id"] == 123456, f"obtuvo {_m['author_id']!r}")
+check("dimensions se parsean aunque vengan como string",
+      _m["width"] == 1080 and _m["height"] == 1350,
+      f"obtuvo {_m['width']}x{_m['height']}")
+check("los counts que ya eran int siguen funcionando",
+      _m["likes"] == 394 and _m["comments"] == 8 and _m["author_followers"] == 8684)
+check("coerce: bool no se acepta como int",
+      G._coerce_int(True) is None and G._coerce_int(False) is None)
+check("coerce: basura sigue siendo None",
+      G._coerce_int("abc") is None and G._coerce_int(None) is None
+      and G._coerce_int("") is None)
+
+# --------------------------------------------------------------------------- #
+print("\n== BUG 3: datetime serialized explicitly ==")
+# --------------------------------------------------------------------------- #
+import warnings as _warnings
+
+_s3 = PostStore(tmpdb())
+_s3.record_discovered([("DT000000001", "u")], "q")
+_dtval = _dt(2026, 8, 1, 12, 0, tzinfo=_tz.utc)
+with _warnings.catch_warnings(record=True) as _caught:
+    _warnings.simplefilter("always")
+    _s3.mark_ok("DT000000001", query="q", author="a", caption="c", image_url="i",
+                local_image_path=None, is_video=False, source_serp_url="s",
+                scraped_at=_dtval.isoformat(), attempts=1,
+                extra={"post_published_at": _dtval,
+                       "post_published_at_inferred": True})
+_dep = [w for w in _caught
+        if "datetime adapter" in str(w.message) and w.category is DeprecationWarning]
+check("mark_ok NO usa el adaptador datetime deprecado", not _dep,
+      f"warnings: {[str(w.message)[:60] for w in _dep]}")
+check("el timestamp se guarda igual, en ISO",
+      _s3._ex("SELECT post_published_at FROM posts").fetchone()["post_published_at"]
+      == "2026-08-01T12:00:00+00:00",
+      _s3._ex("SELECT post_published_at FROM posts").fetchone()["post_published_at"])
+_s3.close()
+
+# --------------------------------------------------------------------------- #
+print("\n== BUG 4: _parse_dt ya no inventa timestamps ==")
+# --------------------------------------------------------------------------- #
+check("timestamp corrupto -> None (ya no 'ahora')",
+      G._parse_dt("no-es-una-fecha") is None, f"obtuvo {G._parse_dt('no-es-una-fecha')!r}")
+check("timestamp ausente -> None", G._parse_dt(None) is None and G._parse_dt("") is None)
+_dtok = G._parse_dt("2026-08-01T12:00:00+00:00")
+check("valid timestamp is parsed", _dtok is not None and _dtok.year == 2026)
+check("naive se normaliza a UTC",
+      (G._parse_dt("2026-08-01T12:00:00") or _dt(2026, 1, 1)).tzinfo is not None)
+
+# --------------------------------------------------------------------------- #
+print("\n== stats: los fallos de imagen ya no se esconden ==")
+# --------------------------------------------------------------------------- #
+_st_stats = G.ScrapeStats()
+check("ScrapeStats tiene images_failed",
+      "images_failed" in G.ScrapeStats.model_fields)
+check("images_failed arranca en 0", _st_stats.images_failed == 0)
+
+# --------------------------------------------------------------------------- #
 print("\n== rate limiter ==")
 # --------------------------------------------------------------------------- #
 import threading

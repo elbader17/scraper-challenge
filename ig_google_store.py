@@ -33,6 +33,19 @@ STATUS_UNAVAILABLE: Final[str] = "unavailable"
 STATUS_FAILED: Final[str] = "failed"
 DONE_STATUSES: Final[tuple[str, ...]] = (STATUS_OK, STATUS_UNAVAILABLE)
 
+
+def _iso(value: Any) -> Optional[str]:
+    """Serializes a datetime/date to an ISO string for SQLite.
+
+    Python's implicit datetime adapter is deprecated since 3.12 and slated for
+    removal, so the conversion is explicit here. It also keeps the stored format
+    stable regardless of the interpreter version.
+    """
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)
+
 SCHEMA: Final[str] = """
 CREATE TABLE IF NOT EXISTS posts (
     shortcode        TEXT PRIMARY KEY,
@@ -209,7 +222,7 @@ class PostStore:
              x.get("width"), x.get("height"), x.get("alt_text"),
              int(x.get("carousel_count") or 0),
              json.dumps(x.get("carousel_shortcodes") or [], ensure_ascii=False),
-             x.get("post_published_at"),
+             _iso(x.get("post_published_at")),
              int(bool(x.get("post_published_at_inferred"))), shortcode),
         )
 

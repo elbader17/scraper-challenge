@@ -212,6 +212,9 @@ class ScrapeStats(BaseModel):
     discovered: int = 0
     processed: int = 0
     images_saved: int = 0
+    # A post can end up `ok` with its image missing. That case used to be
+    # indistinguishable from a complete post; `images_failed` makes it explicit.
+    images_failed: int = 0
     skipped_unavailable: int = 0
     failed: int = 0
 
@@ -1045,21 +1048,33 @@ def detect_image_format(data: bytes) -> tuple[str, str]:
 
 def download_image(client: HttpClient, out_dir: Path, post: InstagramPost,
                    overwrite: bool) -> bool:
+    """Downloads the image. Returns True if a new file was written.
+
+    Transient failures are PROPAGATED as `FetchError` on purpose: the caller wraps
+    this in `with_retries`, and it can only retry if the exception actually reaches
+    it. Catching them here and returning `False` made `with_retries` see a "success"
+    and never retry, which lost the image permanently on a one-off CDN 429 (see
+    ARCHITECTURE.md section 5).
+
+    Returns `False` without raising in the two cases that are not failures:
+      - the post has no image URL;
+      - the file already exists and `--overwrite` was not passed (idempotency).
+    """
     if not post.image_url:
         return False
-    try:
-        data = client.get_bytes(post.image_url)
-    except FetchError as exc:
-        LOG.warning("[%s] image download failed: %s", post.shortcode, exc)
-        return False
+
+    # `client.get_bytes` already translates 429/5xx into this exception hierarchy.
+    data = client.get_bytes(post.image_url)
+
     if len(data) < 1024:
-        LOG.warning("[%s] suspiciously small image response", post.shortcode)
-        return False
+        raise FetchError(
+            f"suspiciously small image response for {post.shortcode} "
+            f"({len(data)} bytes)")
 
     ext, _mime = detect_image_format(data)
     if ext == "bin":
-        LOG.warning("[%s] unknown image format; not saving", post.shortcode)
-        return False
+        raise FetchError(
+            f"unknown image format for {post.shortcode}; not saving")
 
     # The extension is decided only now, so the "already exists" check
     # has to look for any previous file of the shortcode.
@@ -1165,7 +1180,7 @@ def write_metadata_from_store(store: "PostStore", stats: ScrapeStats, query: str
             shortcode=r["shortcode"], author=r["author"], caption=r["caption"],
             image_url=r["image_url"], local_image_path=r["local_image_path"],
             source_serp_url=r["source_serp_url"] or "",
-            scraped_at=_parse_dt(r["scraped_at"]),
+            scraped_at=_parse_dt(r["scraped_at"]) or _fallback_now(),
             is_video=bool(r["is_video"]),
             rich_metadata=bool(r["rich_metadata"]),
             media_id=r["media_id"], likes=r["likes"], comments=r["comments"],
@@ -1190,14 +1205,33 @@ def write_metadata_from_store(store: "PostStore", stats: ScrapeStats, query: str
     return path
 
 
-def _parse_dt(value: Optional[str]) -> datetime:
+def _fallback_now() -> datetime:
+    """Current UTC time. Used only when a required timestamp is absent or corrupt.
+
+    `_parse_dt` returns None for bad input; `scraped_at` is a required field of
+    `InstagramPost`, so a row with no usable timestamp falls back to "now" rather
+    than failing the whole rebuild of metadata.json.
+    """
+    return datetime.now(timezone.utc)
+
+
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    """Parses an ISO timestamp, returning None when it is missing or corrupt.
+
+    It used to fall back to `datetime.now()` on any failure, which turned a
+    corrupted `scraped_at` into "right now" and silently hid the corruption from
+    whoever consumed `metadata.json`. A missing timestamp is now honestly None;
+    the extraction moment is still always available as the post's own `scraped_at`
+    field, so no information is actually lost.
+    """
     if not value:
-        return datetime.now(timezone.utc)
+        return None
     try:
         dt = datetime.fromisoformat(value)
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return datetime.now(timezone.utc)
+    except (ValueError, TypeError):
+        LOG.warning("unparseable timestamp %r; leaving it empty", value)
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 # --------------------------------------------------------------------------- #
@@ -1288,13 +1322,33 @@ def extract_context_json(html: str) -> Optional[dict[str, Any]]:
     return None
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    """Accepts an int OR a numeric string.
+
+    Instagram does not serve every number as a JSON number: the blob's `id` and
+    `owner.id` currently arrive as quoted strings (`"3978685437899244498"`), while
+    `edge_liked_by.count` is still a real int. A strict `isinstance(x, int)` check
+    silently dropped `media_id` and `author_id` on every live post, which is why the
+    local database showed NULL for them despite `rich_metadata=1`.
+
+    `bool` is rejected explicitly: it is a subclass of `int` but is never a count.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
 def _first_int(node: Any, *path: str) -> Optional[int]:
     cur: Any = node
     for key in path:
         if not isinstance(cur, dict):
             return None
         cur = cur.get(key)
-    return cur if isinstance(cur, int) else None
+    return _coerce_int(cur)
 
 
 def parse_gql_media(data: dict[str, Any]) -> dict[str, Any]:
@@ -1314,15 +1368,15 @@ def parse_gql_media(data: dict[str, Any]) -> dict[str, Any]:
                 best_url, best_w = r["src"], r["config_width"]
 
     return {
-        "media_id": sm.get("id") if isinstance(sm.get("id"), int) else None,
+        "media_id": _coerce_int(sm.get("id")),
         "likes": _first_int(sm, "edge_liked_by", "count"),
         "comments": _first_int(sm, "edge_media_to_comment", "count"),
-        "author_id": owner.get("id") if isinstance(owner.get("id"), int) else None,
+        "author_id": _coerce_int(owner.get("id")),
         "author_followers": _first_int(owner, "edge_followed_by", "count"),
         "author_verified": owner.get("is_verified")
         if isinstance(owner.get("is_verified"), bool) else None,
-        "width": dims.get("width") if isinstance(dims.get("width"), int) else None,
-        "height": dims.get("height") if isinstance(dims.get("height"), int) else None,
+        "width": _coerce_int(dims.get("width")),
+        "height": _coerce_int(dims.get("height")),
         "alt_text": sm.get("accessibility_caption")
         if isinstance(sm.get("accessibility_caption"), str) else None,
         "carousel_count": len(children),
@@ -1425,7 +1479,10 @@ class PostProcessor:
             )
         except FetchError as exc:
             store.log_error(code, a.retries, f"image:{type(exc).__name__}", str(exc))
-            LOG.warning("[%s] image download failed: %s", code, exc)
+            with self._stats_lock:
+                stats.images_failed += 1
+            LOG.warning("[%s] image download gave up after %d attempts: %s",
+                        code, a.retries, exc)
 
         store.mark_ok(
             code, query=keyword, author=post.author, caption=post.caption,

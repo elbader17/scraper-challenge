@@ -340,7 +340,7 @@ Account, meaning login and permissions.
 ## Tests
 
 ```bash
-python test_ig_google.py    # 75 checks, no network
+python test_ig_google.py    # 100 checks, no network
 ```
 
 They cover discovery idempotency, store states, survival of an interruption
@@ -417,6 +417,6 @@ regulations applicable to your case before scaling volume.
 
 | Document | What it covers |
 |---|---|
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Code map and orientation for another LLM; verified findings; **known bugs** |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Code map and orientation for another LLM; verified findings; **fixed-bug post-mortems** |
 | [`CAPTCHA-RESEARCH.md`](./CAPTCHA-RESEARCH.md) | Benchmark of 6 search engines; why none replaces Google |
 | [`BREADTH-SOLUTION.md`](./BREADTH-SOLUTION.md) | The CAPTCHA-free hashtag-breadth strategy and how to scale it |

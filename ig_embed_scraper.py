@@ -105,9 +105,15 @@ RE_COMMENTS_TAIL: Final[re.Pattern[str]] = re.compile(
 SHORTCODE_ALPHABET: Final[str] = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
-# Epoch of the media ID "snowflake", derived from Instagram's first historical
-# post (id 12705937228168714 @ 2010-10-06T17:05:40Z).
-MEDIA_ID_EPOCH_MS: Final[int] = 1284870074250
+# Epoch of the media ID "snowflake" — the millisecond timestamp the ID scheme is
+# offset from. It must match the value used by `ig_google_scraper.py`.
+#
+# Validated, not guessed: decoding the shortcode `DN292ZY3K4y` reproduces the
+# official `id` from the embed's GraphQL blob (3978685437899244498), and captions
+# that declare their own month/year match ("dropping in August 2026" -> 2026-08).
+# The previously used value (1284870074250) was ~340 days lower and produced
+# plausible-looking but wrong dates.
+MEDIA_ID_EPOCH_MS: Final[int] = 1314220021721
 
 SLEEP_MIN: Final[float] = 1.5
 SLEEP_MAX: Final[float] = 3.5

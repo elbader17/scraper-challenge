@@ -21,7 +21,7 @@ knowledge about how Instagram's and Google's HTML responds today.
 adding code.
 
 **Status:** 3,934 lines of Python, no dependencies outside `requirements.txt`, no CI.
-`python test_ig_google.py` → 75 checks, all pass.
+`python test_ig_google.py` → 100 checks, all pass.
 
 ---
 
@@ -32,7 +32,7 @@ adding code.
 | `ig_google_scraper.py` | 1,735 | **Main script.** Google discovery → embed → image + SQLite | Yes, the one that matters |
 | `ig_google_store.py` | 253 | Incremental SQLite store (autocommit, thread-safe) | Yes, imported by the above |
 | `ig_hashtag_breadth.py` | ~590 | **CAPTCHA-free.** Hashtag-grid discovery at scale | Yes, recommended entry point |
-| `test_ig_google.py` | 486 | 75 checks, no network | Yes |
+| `test_ig_google.py` | 680 | 100 checks, no network | Yes |
 | `ig_embed_scraper.py` | 839 | Original PoC: hashtag public grid | Legacy. **See epoch bug** |
 | `ig_serp_scraper.py` | 621 | Discovery via DuckDuckGo | Legacy, no real pagination |
 | `README.md` | ~400 | Log of findings and measurements | Read for the *why* |
@@ -187,81 +187,95 @@ Instagram exposes.
 
 ---
 
-## 5. Known bugs (verified by me, not in the README)
+## 5. Known bugs — all fixed on 2026-10-12
 
-### 🔴 BUG 1 — Retries do not apply to image downloads
+This section previously described four open bugs plus one note. All of them are
+fixed, and a fifth bug was found and fixed during that work. The root causes are kept
+here because they explain *why* the code looks the way it does, and because the same
+class of mistake is easy to reintroduce.
 
-`ig_google_scraper.py:1050-1054`. `download_image()` catches `FetchError` internally
-and returns `False`. In `PostProcessor.process` (`:1422-1429`) the function is wrapped
-in `with_retries(attempts=a.retries)`, but since it **never propagates the exception**,
-the wrapper sees a "success" and **never retries**.
+### ✅ FIXED — Retries did not apply to image downloads
 
-Reproduced with a client that fails twice with 429 and then delivers a valid JPEG:
+**Root cause:** `download_image()` caught `FetchError` internally and returned `False`.
+It was wrapped in `with_retries(attempts=...)`, but since the exception never
+propagated, the wrapper saw a "success" and **never retried**.
 
-```
-HTTP attempts made: 1 (attempts=3)
-with_retries returned: False
-files saved: []
-```
+**Impact:** a transient CDN 429 lost the image **permanently**. The post was still
+marked `ok`, so neither `--retry-failed` nor `--resume` recovered it (`pending()`
+excludes `ok`). `--retries`, `--retry-delay` and `--retry-max-delay` were no-ops for
+images, contradicting the README's guarantee that "a 429 does not lose posts".
 
-**Impact:** a transient CDN 429 loses the image **permanently** — the post is marked
-`ok` anyway, so neither `--retry-failed` nor `--resume` recovers it (`pending()`
-excludes `ok`). The flags `--retries`, `--retry-delay` and `--retry-max-delay` are
-no-ops for images, contradicting the README's guarantee ("a 429 does not lose posts").
+**Why it survived:** the only `download_image` test used a client that **always
+succeeds**. The "fails twice, then recovers" case was never exercised.
 
-**Root cause of the bug:** the `download_image` test (`test_ig_google.py:233`) uses a
-client that **always succeeds**; the "fails then recovers" case is never tested.
+**Fix:** `download_image` now propagates `FetchError` (including the
+suspiciously-small-response and unknown-format cases, which are also transient CDN
+symptoms). It returns `False` *without* raising only for the two non-failure cases:
+no image URL, or the file already exists and `--overwrite` was not passed.
+`test_ig_google.py` now covers recovery, exhaustion, and that a 404 is not retried.
 
-**Suggested fix:** let `download_image` propagate `FetchError` and have the caller's
-`try/except` do the logging and the `return False`.
+### ✅ FIXED — Wrong snowflake epoch in `ig_embed_scraper.py`
 
-### 🟠 BUG 2 — Wrong snowflake epoch in `ig_embed_scraper.py`
+`MEDIA_ID_EPOCH_MS` was `1284870074250`; the correct value is `1314220021721`
+(`ig_google_scraper.py`). They differ by **29,349,947,471 ms ≈ 340 days**.
 
-`ig_embed_scraper.py:110` uses `MEDIA_ID_EPOCH_MS = 1284870074250`; the correct value
-is `1314220021721` (`ig_google_scraper.py:1225`). They differ by
-**29,349,947,471 ms ≈ 340 days**.
+Dates inferred by the hashtag scraper came out ~340 days early — and **silently**,
+because the `infer_published_at()` guard only rejects dates `< 2010` or in the future,
+so a wrong-but-plausible date passes. Validated against captions that declare their
+own month/year: `DbggwHEER81` → `2026-08-01` (caption: "dropping in August 2026"),
+`DVWQjTbjmri` → `2026-03-01` (caption: "dropping in March 2026").
 
-Consequence: dates inferred by the hashtag scraper come out **~340 days too early**
-(wrong). Verified against the 12 real posts in `output/google_running_shoes/`, whose
-captions declare month/year:
+**Fix:** the constant now matches the google scraper, and a test asserts the two
+scripts agree and that decoding `DN292ZY3K4y` reproduces the official blob id.
 
-| shortcode | correct epoch (google) | embed scraper epoch | caption |
-|---|---|---|---|
-| `DbggwHEER81` | **2026-08-01** ✅ | 2025-08-27 ❌ | "dropping in August 2026" |
-| `DVWQjTbjmri` | **2026-03-01** ✅ | 2025-03-26 ❌ | "dropping in March 2026" |
+### ✅ FIXED — Deprecated sqlite3 datetime adapter
 
-The guard in `infer_published_at()` (`ig_embed_scraper.py:590`) discards dates `< 2010`
-or in the future, so **the bug passes silently**: it returns a plausible but wrong date
-340 days off. Both scripts decode the same `media_id`; only the epoch differs.
+`mark_ok()` passed a `datetime` straight to SQLite, which used the **default
+adapter, deprecated since Python 3.12**. It worked on 3.14 but would break when
+removed.
 
-**Limited impact:** `post_published_at` comes out `null` unless `--decode-post-time` is
-passed, and the existing `metadata.json` files (`downloads/`, `output/`) have the date
-as `null`. The damage is latent, not historical.
+**Fix:** `ig_google_store._iso()` serializes datetimes explicitly. A test asserts no
+`DeprecationWarning` is raised and that the stored value is still correct.
 
-### 🟡 BUG 3 — Deprecated sqlite3 datetime adapter
+### ✅ FIXED — `_parse_dt` masked corrupted data
 
-`mark_ok()` (`ig_google_store.py:189`) receives `post_published_at` as a `datetime` (it
-comes from `post.model_dump()`) and SQLite serializes it with the **default adapter,
-deprecated since Python 3.12**:
+Any unparseable timestamp was **silently** replaced with `datetime.now()`, turning a
+corrupted `scraped_at` into "right now" and hiding the corruption from whoever read
+`metadata.json`.
 
-```
-DeprecationWarning: The default datetime adapter is deprecated as of Python 3.12
-```
+**Fix:** `_parse_dt` returns `None` for missing/corrupt input and logs a warning. The
+required `scraped_at` field falls back to `_fallback_now()` only at the single call
+site that needs a value, so `post_published_at` stays honestly `None` instead of
+becoming a fake "now".
 
-It works on 3.14.7 and the roundtrip is correct, but it will break. One-line fix:
-`x.get("post_published_at").isoformat() if ... else None`.
+### ✅ FIXED — Image failures were invisible in `stats`
 
-### 🟡 BUG 4 — `_parse_dt` masks corrupted data
+A post whose image failed ended up `status=ok` with `local_image_path: null` and did
+**not** increment `stats.failed`, so `ok` was read as "complete post".
 
-`ig_google_scraper.py:1193`: any unparseable timestamp is **silently** replaced with
-`datetime.now()`. A corrupted `scraped_at` becomes "right now" and hides the problem.
-Prefer `None` or a warning.
+**Fix:** `ScrapeStats.images_failed` counts them separately. `images_saved` still
+means "a new file was written"; the idempotent "already exists" case is neither.
 
-### 🟡 Note — Image failures are not counted
+### 🔍 FOUND DURING THE FIX — numeric IDs now arrive as strings
 
-A post whose image fails ends up `status=ok` with `local_image_path: null` and **does
-not increment `stats.failed`**. Defensible (the goal is metadata), but it should be
-explicit in `stats` so `ok` is not read as "complete post".
+While validating the epoch against a **live** embed, `media_id` turned out to be
+`NULL` on every real post despite `rich_metadata=1`.
+
+**Root cause:** Instagram no longer serves every number as a JSON number. The blob's
+`id` and `owner.id` now arrive as quoted strings (`"3978685437899244498"`), and
+`dimensions.width/height` as `"1080"`, while `edge_liked_by.count` is still a real
+int. The strict `isinstance(x, int)` checks in `parse_gql_media` silently discarded
+them — **no error, just missing data on every live post.**
+
+**Fix:** `_coerce_int()` accepts an int or a numeric string (rejecting `bool`, which
+is an `int` subclass but never a count). Verified against live embeds: the blob's
+`media_id` now equals the ID decoded from the shortcode, which independently
+re-confirms the epoch.
+
+**Lesson:** the unit tests used a hand-written fixture with an integer `id`, so they
+passed while production data was silently broken. **Test fixtures copied from an
+older capture of a live response are a liability** — re-verify them against the real
+endpoint periodically.
 
 ---
 
@@ -346,7 +360,7 @@ python ig_google_scraper.py --queries-file keywords.txt --limit 500 --resume
 ## 9. Tests
 
 ```bash
-python test_ig_google.py    # 75 checks, no network, ~1 s
+python test_ig_google.py    # 100 checks, no network, ~1 s
 ```
 
 It is a linear assert script (not pytest): each `check(cond, msg)` prints
