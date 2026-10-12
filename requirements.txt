@@ -1,0 +1,11 @@
+# Núcleo
+curl_cffi>=0.7          # impersonación TLS de Chrome (anti-fingerprinting)
+beautifulsoup4>=4.12    # parseo del DOM del embed y de la SERP
+httpx>=0.27             # respaldo si curl_cffi no compila/instala
+pydantic>=2.7           # validación de los modelos de datos (ig_serp, ig_google)
+
+# Opcional: sólo para --interactive (resolver el CAPTCHA en un Chrome real)
+# websockets>=12
+
+# Opcional: soporte de proxy SOCKS5 en el respaldo httpx
+# httpx[socks]>=0.27
