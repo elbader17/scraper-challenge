@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-Almacén incremental (SQLite) para el scraper de Google.
+Incremental store (SQLite) for the Google scraper.
 
-Por qué existe: `metadata.json` se escribía una sola vez, al final del bucle.
-En una corrida larga —miles de posts— un corte a mitad de camino tiraba todo:
-las imágenes quedaban en disco y los metadatos (autor, caption, URL) se perdían.
-Cada post se persiste apenas se procesa, así que la corrida es reanudable.
+Why it exists: `metadata.json` used to be written only once, at the end of the
+loop. On a long run —thousands of posts— an interruption halfway through threw
+everything away: the images stayed on disk and the metadata (author, caption,
+URL) was lost. Each post is persisted as soon as it is processed, so the run is
+resumable.
 
-Esquema:
+Schema:
   posts(shortcode PK, query, status, author, caption, image_url,
         local_image_path, is_video, source_serp_url, scraped_at,
         attempts, last_error)
     status: discovered -> ok | unavailable | failed
   errors(id, shortcode, attempt, kind, message, created_at)
 
-Una corrida es un `run_id` aparte para poder reprocesar sin perder el histórico.
+A run is a separate `run_id` so it can be reprocessed without losing history.
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ CREATE TABLE IF NOT EXISTS posts (
     scraped_at       TEXT,
     attempts         INTEGER NOT NULL DEFAULT 0,
     last_error       TEXT,
-    -- metadata enriquecida (blob GraphQL del embed); null si vino embed liviano
+    -- rich metadata (embed GraphQL blob); null when the embed was light
     rich_metadata      INTEGER NOT NULL DEFAULT 0,
     media_id           INTEGER,
     likes              INTEGER,
@@ -90,11 +91,11 @@ class PostStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # isolation_level=None = autocommit: cada write ya queda en disco, que
-        # es justamente lo que hace segura una interrupción abrupta.
-        # check_same_thread=False + lock: la fase 2/3 puede correr con varios
-        # workers, y una conexión SQLite compartida sin serializar las escrituras
-        # corrompe la base.
+        # isolation_level=None = autocommit: every write is already on disk, which
+        # is exactly what makes an abrupt interruption safe.
+        # check_same_thread=False + lock: phase 2/3 can run with several workers,
+        # and a shared SQLite connection without serializing the writes
+        # corrupts the database.
         self._db = sqlite3.connect(str(self.path), isolation_level=None,
                                    check_same_thread=False)
         self._db.row_factory = sqlite3.Row
@@ -145,10 +146,10 @@ class PostStore:
 
     # -- discovery --------------------------------------------------------
     def record_discovered(self, found: Iterable[tuple[str, str]], query: str) -> int:
-        """Registra shortcodes recién vistos. Devuelve cuántos son nuevos.
+        """Records newly seen shortcodes. Returns how many are new.
 
-        No pisa el estado de los ya procesados: es idempotente y se puede
-        llamar en cada corrida de discovery.
+        It does not overwrite the state of already processed ones: it is idempotent
+        and can be called on every discovery run.
         """
         new = 0
         for code, src in found:
@@ -162,10 +163,10 @@ class PostStore:
 
     def pending(self, query: Optional[str] = None,
                 include_failed: bool = False) -> list[sqlite3.Row]:
-        """Posts a procesar: los que no están terminados.
+        """Posts to process: those that are not finished.
 
-        `include_failed` rehabilita los que fallaron en corridas previas, que de
-        otro modo quedarían enganchados para siempre.
+        `include_failed` re-enables the ones that failed in previous runs, which
+        would otherwise get stuck forever.
         """
         sql = "SELECT * FROM posts WHERE status NOT IN (%s)" % ",".join(
             "?" * len(DONE_STATUSES)

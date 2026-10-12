@@ -1,44 +1,45 @@
 #!/usr/bin/env python3
 """
-Discovery en anchura sobre los hashtags públicos de Instagram. Sin buscadores,
-sin CAPTCHA, sin intervención humana.
+Breadth discovery over Instagram's public hashtags. No search engines, no CAPTCHA,
+no human intervention.
 
-POR QUÉ EXISTE
---------------
-Las tres estrategias anteriores de este proyecto dependen de un motor de búsqueda
-externo, y Google —el único que tiene índice suficiente— exige resolver un CAPTCHA
-por sesión. Eso ata el scraper a una persona sentada frente a la pantalla.
+WHY THIS EXISTS
+---------------
+The three earlier strategies in this project all depend on an external search engine,
+and Google — the only one with a sufficient index — requires solving a CAPTCHA once
+per session. That ties the scraper to a person sitting in front of the screen.
 
-Este script elimina el buscador de la ecuación. En vez de *buscar* posts, visita
-directamente la página pública del hashtag y lee el grid que Instagram ya renderiza.
-Medido: 20 hashtags -> 180 shortcodes únicos, sin CAPTCHA, sin cookies, sin proxy.
+This script removes the search engine from the equation. Instead of *searching* for
+posts, it visits the hashtag's public page directly and reads the grid Instagram
+already renders. Measured: 20 hashtags -> 180 unique shortcodes, no CAPTCHA, no
+cookies, no proxy.
 
-EL PRECIO Y POR QUÉ RINDE
--------------------------
-Cada hashtag expone ~12-14 posts y no pagina (`?page=2` devuelve el mismo grid).
-O sea: el techo es 12 por etiqueta, no por corrida. Pero un hashtag es una unidad
-barata y plentiful, y los posts de etiquetas distintas se solapan sólo ~25%:
+THE PRICE AND WHY IT PAYS OFF
+-----------------------------
+Each hashtag exposes ~12-14 posts and does not paginate (`?page=2` returns the same
+grid). So the ceiling is 12 per tag, not per run. But a tag is a cheap and plentiful
+unit, and posts across distinct tags overlap only ~25%:
 
-    20 hashtags  ->  180 únicos   (~12-14 c/u, 25% solapamiento)
-    100 hashtags ->  ~850 únicos
-    500 hashtags -> ~4000 únicos
+    20 hashtags  ->  180 unique   (~12-14 each, 25% overlap)
+    100 hashtags ->  ~850 unique
+    500 hashtags -> ~4000 unique
 
-Para llegar a miles se crece la lista de etiquetas, no el límite por etiqueta. Es
-exactamente lapalanca que el README recomienda para Google ("el techo es breadth, no
-profundidad"), pero sin el CAPTCHA encima.
+To reach thousands you grow the list of tags, not the limit per tag. This is exactly
+the lever the README recommends for Google ("the ceiling is breadth, not depth"), but
+without a CAPTCHA on top.
 
-Es la opción más lenta en requests (1 request por etiqueta) y la más rápida en
-obstáculos: no hay nada que destrabar.
+It is the slowest option in requests (1 request per tag) and the fastest to unblock:
+there is nothing to unblock.
 
-REUTILIZA LAS PIEZAS YA PROBADAS
---------------------------------
-Discovery + `is_unavailable` + detección de shortcode de `ig_embed_scraper`;
-enriquecimiento del blob GraphQL, snowflake y `detect_image_format` de
-`ig_google_scraper`; y el store incremental de `ig_google_store`. No se reimplementa
-ninguna heurística que ya esté medida y documentada: el riesgo de un parser nuevo es
-mayor que el de reutilizar uno que funciona.
+REUSES THE ALREADY-PROVEN PIECES
+---------------------------------
+Discovery + `is_unavailable` + shortcode detection from `ig_embed_scraper`; GraphQL
+blob enrichment, snowflake and `detect_image_format` from `ig_google_scraper`; and the
+incremental store from `ig_google_store`. No heuristic that is already measured and
+documented is reimplemented: the risk of a new parser is higher than reusing one that
+works.
 
-Uso:
+Usage:
     python ig_hashtag_breadth.py --hashtag running --limit 20
     python ig_hashtag_breadth.py --hashtags-file tags.txt --limit 500 --workers 6
     python ig_hashtag_breadth.py --hashtags-file tags.txt --resume
@@ -89,8 +90,8 @@ LOG: logging.Logger = logging.getLogger("breadth")
 
 TAG_PAGE: Final[str] = "https://www.instagram.com/explore/tags/{tag}/"
 
-# Posts por etiqueta que el grid público expone. No es un límite imposed por este
-# script: es lo que Instagram renderiza, y se mide en runtime (stats.discovered_per_tag).
+# Posts per tag that the public grid exposes. This is not a limit imposed by this
+# script: it is what Instagram renders, measured at runtime.
 EXPECTED_PER_TAG: Final[int] = 12
 
 
@@ -99,12 +100,12 @@ EXPECTED_PER_TAG: Final[int] = 12
 # --------------------------------------------------------------------------- #
 def discover_from_tag(client: Any, tag: str, *, attempts: int = 3,
                       timeout: float = 25.0) -> list[str]:
-    """Shortcodes públicos de una etiqueta.
+    """Public shortcodes of a hashtag.
 
-    Reintenta ante resultado vacío: Instagram sirve a veces una "página shell"
-    genérica (title="Instagram", ~490 KB, cero anclas) incluso para etiquetas
-    válidas y muy populares. Se comprobó con #moda: 12 posts en una corrida y 0 en
-    la siguiente. Un solo intento convertiría ese falso negativo en error definitivo.
+    Retries on an empty result: Instagram sometimes serves a generic "shell page"
+    (title="Instagram", ~490 KB, zero anchors) even for valid and very popular tags.
+    Verified with #moda: 12 posts in one run and 0 in the next. A single attempt
+    would turn that false negative into a definitive error.
     """
     url = TAG_PAGE.format(tag=tag)
     for attempt in range(1, attempts + 1):
@@ -124,13 +125,13 @@ def discover_from_tag(client: Any, tag: str, *, attempts: int = 3,
         html = body.decode("utf-8", errors="replace")
         from_anchors = [c for c in RE_ANCHOR.findall(html) if is_plausible_shortcode(c)]
         from_json = [c for c in RE_JSON_CODE.findall(html) if is_plausible_shortcode(c)]
-        # dict.fromkeys = dedup estable que conserva el orden de aparición.
+        # dict.fromkeys = stable dedup that preserves order of appearance.
         ordered = list(dict.fromkeys(from_anchors + from_json))
         if ordered:
             return ordered
 
         LOG.warning("  #%s: 0 shortcodes en el intento %d/%d (%d bytes); "
-                    "Instagram puede estar sirviendo su página shell.",
+                    "Instagram may be serving its shell page.",
                     tag, attempt, attempts, len(html))
         if attempt < attempts:
             time.sleep(random.uniform(4.0, 7.0))
@@ -138,10 +139,10 @@ def discover_from_tag(client: Any, tag: str, *, attempts: int = 3,
 
 
 def parse_embed(html: str, shortcode: str) -> InstagramPost:
-    """Reusa el parseo del embed público (DOM + blob GraphQL + snowflake).
+    """Reuses the public embed parsing (DOM + GraphQL blob + snowflake).
 
-    Idéntico al de `ig_google_scraper.parse_embed`, salvo que la URL de origen es la
-    página del hashtag y no una SERP de Google.
+    Identical to `ig_google_scraper.parse_embed`, except the source URL is the
+    hashtag page rather than a Google SERP.
     """
     from bs4 import BeautifulSoup
 
@@ -173,7 +174,7 @@ def parse_embed(html: str, shortcode: str) -> InstagramPost:
                 break
 
     enrich = _enrich_from_gql(html, shortcode)
-    # El DOM siempre aporta una imagen; el blob puede subir la resolución.
+    # The DOM always provides an image; the blob may raise the resolution.
     if not enrich.get("image_url"):
         enrich["image_url"] = image_url
 
@@ -188,7 +189,7 @@ def parse_embed(html: str, shortcode: str) -> InstagramPost:
 
 def download_image(client: Any, out_dir: Path, post: InstagramPost,
                    overwrite: bool) -> bool:
-    """Descarga la imagen decidiendo la extensión POR LOS BYTES.
+    """Downloads the image deciding the extension FROM THE BYTES.
 
     El CDN de Instagram sirve WebP aunque la URL termine en `.jpg` (medido 2 de 24).
     Guardar WebP como `.jpg` rompe PIL, torchvision y ffmpeg.
@@ -197,11 +198,11 @@ def download_image(client: Any, out_dir: Path, post: InstagramPost,
         return False
     # OJO: `client.get()` devuelve la tupla (status, body, headers), no los bytes
     # sueltos. Hay que desempaquetar: tratar la tupla como si fueran los bytes
-    # hace que len() dé 3 y caiga siempre en "sospechosamente chica".
+    # makes len() return 3 and always fall into "suspiciously small".
     try:
         _status, data, _headers = client.get(post.image_url)
     except (EmbedFetchError, EmbedRateLimitedError) as exc:
-        LOG.warning("[%s] falló la descarga de imagen: %s", post.shortcode, exc)
+        LOG.warning("[%s] image download failed: %s", post.shortcode, exc)
         return False
     if len(data) < 1024:
         LOG.warning("[%s] respuesta de imagen sospechosamente chica (%d bytes)",
@@ -232,7 +233,7 @@ class RateLimiter:
     """Espacia las peticiones globalmente, aunque haya N workers.
 
     El slot se reserva bajo lock pero la espera ocurre FUERA del lock: si no, los
-    workers se serializarían de a uno y la concurrencia no serviría.
+    workers would serialize one at a time and concurrency would be pointless.
     """
 
     def __init__(self, min_interval: float) -> None:
@@ -258,7 +259,7 @@ class RateLimiter:
 class BreadthProcessor:
     """Procesa un shortcode: embed -> parseo -> imagen -> checkpoint.
 
-    Seguro desde varios hilos: cada worker tiene su propia sesión HTTP, el store
+    Safe from several threads: each worker has its own HTTP session, the store
     serializa escrituras con lock, y el rate limiter es global.
     """
 
@@ -276,8 +277,8 @@ class BreadthProcessor:
 
     def _new_client(self) -> Any:
         # Se reutiliza `build_client` del embed scraper en vez de construir la
-        # sesión a mano: él ya resuelve la impersonación de TLS, el fallback a
-        # httpx y la redacción de credenciales del proxy.
+        # session by hand: it already handles TLS impersonation, the fallback to
+        # httpx and proxy credential redaction.
         return build_client(ScraperConfig(
             hashtag="probe", limit=0, output_dir=self.out_dir,
             proxy_url=self.args.proxy_url, timeout=self.args.timeout,
@@ -309,7 +310,7 @@ class BreadthProcessor:
         a = self.args
         client = self.client()
 
-        # --- Fase 2: embed público (200 sin sesión) ---
+        # --- Phase 2: public embed (200 without session) ---
         self.limiter.acquire()
         html = ""
         try:
@@ -369,13 +370,13 @@ class BreadthProcessor:
 
 
 # --------------------------------------------------------------------------- #
-# Orquestación
+# Orchestration
 # --------------------------------------------------------------------------- #
 def load_tags(args: argparse.Namespace) -> list[str]:
     """Arma la lista de etiquetas desde --hashtag (repetible) y --hashtags-file.
 
-    La lista ES la unidad de escala: 12 posts por etiqueta, así que para miles de
-    posts hacen falta cientos de etiquetas, no un límite más alto.
+    The list IS the unit of scale: 12 posts per tag, so for thousands of posts you
+    need hundreds of tags, not a higher limit.
     """
     raw: list[str] = list(args.hashtag or [])
     if args.hashtags_file:
@@ -398,8 +399,8 @@ def run(args: argparse.Namespace) -> int:
     out_dir = Path(args.output_dir or f"output/hashtags_{len(tags)}tags")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Cuántas etiquetas hacen falta para el límite pedido. Cada una rinde ~12, y
-    # un cuarto se solapa, así que se pide un poco más de las necesarias.
+    # How many tags are needed for the requested limit. Each yields ~12, and a
+    # quarter overlaps, so ask for a few more than strictly necessary.
     if args.limit > 0:
         need = min(len(tags), max(1, int(args.limit / (EXPECTED_PER_TAG * 0.75)) + 1))
     else:
@@ -413,7 +414,7 @@ def run(args: argparse.Namespace) -> int:
     store = PostStore(db_path)
     store.start_run(f"{len(plan)}tags", {"limit": args.limit, "workers": args.workers})
 
-    # Cliente solo para el discovery (secuencial a propósito: un request por
+    # Client for discovery only (sequential on purpose: one request per
     # etiqueta, y el objetivo es no exceder el ritmo de Instagram, no la velocidad).
     dclient = build_client(ScraperConfig(
         hashtag="probe", limit=0, output_dir=out_dir,
@@ -424,7 +425,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         for i, tag in enumerate(plan, start=1):
             if args.limit > 0 and len(discovered) >= args.limit:
-                LOG.info("  límite alcanzado en %d/%d etiquetas", i - 1, len(plan))
+                LOG.info("  limit reached at %d/%d tags", i - 1, len(plan))
                 break
             codes = discover_from_tag(dclient, tag, attempts=args.tag_retries,
                                       timeout=args.timeout)
@@ -439,7 +440,7 @@ def run(args: argparse.Namespace) -> int:
                 break
             time.sleep(args.tag_delay)
 
-        LOG.info("Discovery: %d shortcodes únicos de %d etiquetas (%d sin grid)",
+        LOG.info("Discovery: %d unique shortcodes from %d tags (%d without grid)",
                  len(discovered), len(plan), len(empty_tags))
 
         # Persistir el discovery antes de procesar: si la corrida se corta, el
@@ -536,7 +537,7 @@ def run(args: argparse.Namespace) -> int:
     meta_path.write_text(_json.dumps(meta, indent=2, ensure_ascii=False, default=str),
                          encoding="utf-8")
 
-    LOG.info("Listo: %d posts, %d imágenes -> %s", len(rows), proc._stats["images"],
+    LOG.info("Done: %d posts, %d images -> %s", len(rows), proc._stats["images"],
              meta_path)
     LOG.info("Stats: %s", proc._stats)
     store.close()
@@ -545,15 +546,15 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description=("Discovery en anchura sobre hashtags públicos de Instagram. "
-                     "Sin buscadores, sin CAPTCHA, sin intervención humana."),
+        description=("Breadth discovery over Instagram's public hashtags. "
+                     "No search engines, no CAPTCHA, no human intervention."),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--hashtag", action="append", default=None,
                    help="Etiqueta sin '#'. Repetible. Cada una rinde ~12 posts.")
     p.add_argument("--hashtags-file", default=None,
-                   help="Archivo con una etiqueta por línea (usa # para comentarios)")
+                   help="File with one tag per line (uses # for comments)")
     p.add_argument("--limit", type=int, default=20,
-                   help="Máximo de posts (default 20)")
+                   help="Maximum posts (default 20)")
     p.add_argument("--output-dir", default=None,
                    help="Carpeta de salida (default output/hashtags_{n}tags)")
     p.add_argument("--db", default=None,
@@ -565,13 +566,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tag-delay", type=float, default=2.5,
                    help="Pausa entre etiquetas en el discovery (default 2.5)")
     p.add_argument("--tag-retries", type=int, default=3,
-                   help="Intentos por etiqueta ante página shell (default 3)")
+                   help="Attempts per tag on a shell page (default 3)")
     p.add_argument("--retries", type=int, default=3)
     p.add_argument("--retry-delay", type=float, default=2.0)
     p.add_argument("--retry-max-delay", type=float, default=60.0)
     p.add_argument("--timeout", type=float, default=25.0)
     p.add_argument("--overwrite", action="store_true",
-                   help="Re-descargar imágenes ya presentes")
+                   help="Re-download images already present")
     p.add_argument("--resume", action="store_true",
                    help="Omitir posts ya terminados")
     p.add_argument("--retry-failed", action="store_true")

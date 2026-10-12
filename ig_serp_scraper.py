@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
 """
-Prueba de Concepto: Estrategia de Indexación Indirecta (SERP Scraping).
+Proof of Concept: Indirect Indexing Strategy (SERP Scraping).
 
-Descubre publicaciones públicas de Instagram SIN tocar directamente la
-indexación de Instagram y SIN credenciales de usuario:
+Discovers public Instagram posts WITHOUT touching Instagram's indexing
+directly and WITHOUT user credentials:
 
-    Motor de búsqueda  --(dork site:instagram.com)-->  URLs indexadas
+    Search engine      --(dork site:instagram.com)-->  Indexed URLs
                                                               |
                                                        shortcodes
                                                               |
-        https://www.instagram.com/p/{code}/embed/captioned/  -->  datos + foto
+        https://www.instagram.com/p/{code}/embed/captioned/  -->  data + photo
 
-Hallazgos medidos contra los motores reales (ver README):
+Findings measured against the real engines (see README):
 
-  * DuckDuckGo HTML (`html.duckduckgo.com/html/`) es el ÚNICO motor que
-    devuelve URLs de posts con el operador `site:instagram.com/p/`.
-      - Google: responde 200 pero devuelve la página JS de consentimiento, 0 URLs.
-      - Bing:   IGNORA el operador `site:` -> devuelve sitios de noticias, 0 URLs.
-  * La paginación clásica de DDG está BLOQUEADA: `&s=10` devuelve HTTP 202.
-    Por eso la escala se logra ROTANDO DORKS: cada dork distinto aporta ~9-10
-    shortcodes nuevos, hasta un máximo de ~10 por dork.
-  * DDG responde HTTP 202 como señal de throttling (no 429). Requiere esperas
-    amplias; con 2-4 s entre consultas se bloquea en la 2ª o 3ª.
-  * Los shortcodes así obtenidos SÍ resuelven a posts reales y vivos: se
-    validó que 6/6 devolvieron caption e imagen desde el embed público.
+  * DuckDuckGo HTML (`html.duckduckgo.com/html/`) is the ONLY engine that
+    returns post URLs with the `site:instagram.com/p/` operator.
+      - Google: replies 200 but returns the JS consent page, 0 URLs.
+      - Bing:   IGNORES the `site:` operator -> returns news sites, 0 URLs.
+  * DDG's classic pagination is BLOCKED: `&s=10` returns HTTP 202.
+    That is why scale is achieved by ROTATING DORKS: each distinct dork
+    contributes ~9-10 new shortcodes, up to a maximum of ~10 per dork.
+  * DDG replies HTTP 202 as a throttling signal (not 429). It needs wide
+    waits; with 2-4 s between queries it blocks on the 2nd or 3rd.
+  * The shortcodes obtained this way DO resolve to real, live posts: it was
+    validated that 6/6 returned caption and image from the public embed.
 
-Uso:
+Usage:
     python ig_serp_scraper.py --query "running shoes" --limit 20
     python ig_serp_scraper.py --query sneakers --limit 40 --delay-min 8 --delay-max 15
 """
@@ -46,18 +46,18 @@ from typing import Any, Final, Iterable, Optional, Protocol
 try:
     from bs4 import BeautifulSoup  # type: ignore
 except ImportError:  # pragma: no cover
-    sys.exit("Falta beautifulsoup4 ->  pip install -r requirements.txt")
+    sys.exit("Missing beautifulsoup4 ->  pip install -r requirements.txt")
 
 try:
     from pydantic import BaseModel, Field, HttpUrl, field_validator  # type: ignore
 except ImportError:  # pragma: no cover
-    sys.exit("Falta pydantic ->  pip install -r requirements.txt")
+    sys.exit("Missing pydantic ->  pip install -r requirements.txt")
 
 
 LOG: logging.Logger = logging.getLogger("serp_scraper")
 
 # --------------------------------------------------------------------------- #
-# Constantes
+# Constants
 # --------------------------------------------------------------------------- #
 USER_AGENT: Final[str] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -66,18 +66,18 @@ USER_AGENT: Final[str] = (
 EMBED_URL: Final[str] = "https://www.instagram.com/p/{shortcode}/embed/captioned/"
 DDG_HTML_URL: Final[str] = "https://html.duckduckgo.com/html/"
 
-# Shortcode de Instagram en las URLs indexadas.
+# Instagram shortcode inside the indexed URLs.
 RE_SHORTCODE: Final[re.Pattern[str]] = re.compile(
     r"instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_\-]{10,12})"
 )
-# Autor colgado del bloque Caption del embed.
+# Author hanging from the embed's Caption block.
 RE_AUTHOR_LINK: Final[re.Pattern[str]] = re.compile(
     r"^https?://(?:www\.)?instagram\.com/([A-Za-z0-9._]+)/(?:\?|$)"
 )
 RE_AUTHOR_ALT: Final[re.Pattern[str]] = re.compile(
     r"Instagram post shared by @([A-Za-z0-9._]+)"
 )
-# Avatar: nunca es la foto del post.
+# Avatar: never the post's photo.
 RE_AVATAR_CDN: Final[re.Pattern[str]] = re.compile(r"/t51\.2885-19/")
 RE_COMMENTS_TAIL: Final[re.Pattern[str]] = re.compile(
     r"\s*View all ([\d.,]+[KkMm]? )?comments?\.?\s*$", re.IGNORECASE
@@ -92,8 +92,8 @@ CAPTCHA_MARKERS: Final[tuple[str, ...]] = (
     "anomaly.js", "bots use duckduckgo too",
 )
 
-# Plantillas de dork. La rotación entre ellas es el mecanismo de "paginación"
-# del que dispone esta técnica: cada plantilla devuelve un conjunto distinto.
+# Dork templates. Rotating between them is the "pagination" mechanism this
+# technique has: each template returns a different set.
 DORK_TEMPLATES: Final[tuple[str, ...]] = (
     'site:instagram.com/p/ "{kw}"',
     'site:instagram.com/reel/ "{kw}"',
@@ -111,17 +111,17 @@ DORK_TEMPLATES: Final[tuple[str, ...]] = (
 
 
 # --------------------------------------------------------------------------- #
-# Modelos de datos (pydantic)
+# Data models (pydantic)
 # --------------------------------------------------------------------------- #
 class InstagramPost(BaseModel):
-    """Una publicación extraída del embed público."""
+    """A post extracted from the public embed."""
 
     shortcode: str
     author: Optional[str] = None
     caption: Optional[str] = None
     image_url: Optional[str] = None
     local_image_path: Optional[str] = None
-    # URL de la SERP que reveló este shortcode: trazabilidad del descubrimiento.
+    # SERP URL that revealed this shortcode: discovery traceability.
     source_serp_url: str
     scraped_at: datetime
     is_video: bool = False
@@ -154,18 +154,18 @@ class MetadataFile(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Excepciones
+# Exceptions
 # --------------------------------------------------------------------------- #
 class FetchError(RuntimeError):
-    """Fallo recuperable en una descarga."""
+    """Recoverable failure in a download."""
 
 
 class NotFoundError(FetchError):
-    """HTTP 404 - recurso inexistente."""
+    """HTTP 404 - nonexistent resource."""
 
 
 class RateLimitedError(FetchError):
-    """HTTP 429 o 202 - el motor está limitando o pidiendo verificación."""
+    """HTTP 429 or 202 - the engine is rate-limiting or asking for verification."""
 
     def __init__(self, message: str, retry_after: Optional[float] = None) -> None:
         super().__init__(message)
@@ -173,11 +173,11 @@ class RateLimitedError(FetchError):
 
 
 class CaptchaError(FetchError):
-    """El motor respondió con una verificación humana/captcha."""
+    """The engine replied with a human/captcha verification."""
 
 
 # --------------------------------------------------------------------------- #
-# Cliente HTTP
+# HTTP client
 # --------------------------------------------------------------------------- #
 class HttpClient(Protocol):
     def get_text(self, url: str, *, params: Optional[dict[str, str]] = None,
@@ -187,10 +187,10 @@ class HttpClient(Protocol):
 
 
 def _headers(engine: str) -> dict[str, str]:
-    """Headers completos de escritorio.
+    """Full desktop headers.
 
-    Los `Sec-Fetch-*` replican una navegación real iniciada desde la barra de
-    direcciones; su ausencia es una señal trivial de automatización.
+    The `Sec-Fetch-*` replicate a real navigation started from the address
+    bar; their absence is a trivial automation signal.
     """
     h = {
         "User-Agent": USER_AGENT,
@@ -209,16 +209,16 @@ def _headers(engine: str) -> dict[str, str]:
         h["Referer"] = "https://duckduckgo.com/"
     elif engine == "bing":
         h["Referer"] = "https://www.bing.com/"
-    else:  # embed de Instagram
+    else:  # Instagram embed
         h["Referer"] = "https://www.instagram.com/"
     return h
 
 
 class CurlCffiClient:
-    """Transporte con impersonación de TLS de Chrome (JA3/JA4 reales)."""
+    """Transport with Chrome TLS impersonation (real JA3/JA4)."""
 
     def __init__(self, proxy_url: Optional[str] = None, timeout: float = 25.0) -> None:
-        from curl_cffi import requests as cc  # import perezoso
+        from curl_cffi import requests as cc  # lazy import
 
         proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         self._s = cc.Session(impersonate="chrome", proxies=proxies, timeout=timeout)
@@ -236,23 +236,23 @@ class CurlCffiClient:
 
     @staticmethod
     def _check(status: int, url: str) -> None:
-        # DDG usa 202 (y no 429) como señal de throttling.
+        # DDG uses 202 (not 429) as its throttling signal.
         if status in (429, 202):
-            raise RateLimitedError(f"HTTP {status} en {url}")
+            raise RateLimitedError(f"HTTP {status} at {url}")
         if status == 404:
-            raise NotFoundError(f"404 en {url}")
+            raise NotFoundError(f"404 at {url}")
         if status >= 400:
-            raise FetchError(f"HTTP {status} en {url}")
+            raise FetchError(f"HTTP {status} at {url}")
 
     def close(self) -> None:
         self._s.close()
 
 
 class HttpxClient:
-    """Respaldo si curl_cffi no está disponible."""
+    """Fallback if curl_cffi is not available."""
 
     def __init__(self, proxy_url: Optional[str] = None, timeout: float = 25.0) -> None:
-        import httpx  # import perezoso
+        import httpx  # lazy import
 
         self._s = httpx.Client(timeout=timeout, follow_redirects=True, proxy=proxy_url)
 
@@ -273,19 +273,19 @@ class HttpxClient:
 
 def build_client(proxy_url: Optional[str], timeout: float) -> HttpClient:
     if proxy_url:
-        LOG.info("Proxy activo: %s", re.sub(r"//[^@/]*@", "//***:***@", proxy_url))
+        LOG.info("Proxy active: %s", re.sub(r"//[^@/]*@", "//***:***@", proxy_url))
     try:
         return CurlCffiClient(proxy_url, timeout)
     except Exception as exc:  # noqa: BLE001
-        LOG.warning("curl_cffi no disponible (%s); uso httpx", exc)
+        LOG.warning("curl_cffi not available (%s); using httpx", exc)
         return HttpxClient(proxy_url, timeout)
 
 
 # --------------------------------------------------------------------------- #
-# Fase 1 - Descubrimiento en SERPs
+# Phase 1 - Discovery in SERPs
 # --------------------------------------------------------------------------- #
 def build_dorks(keyword: str, max_dorks: int) -> list[str]:
-    """Genera la rotación de dorks para una keyword."""
+    """Builds the dork rotation for a keyword."""
     kw = keyword.strip().strip('"')
     seen: list[str] = []
     for tpl in DORK_TEMPLATES:
@@ -298,11 +298,11 @@ def build_dorks(keyword: str, max_dorks: int) -> list[str]:
 
 
 class SerpClient:
-    """Cliente de DuckDuckGo HTML.
+    """DuckDuckGo HTML client.
 
-    Se midieron otros motores y no son viables para esta técnica:
-      - Google: 200 pero devuelve la página JS de consentimiento (0 URLs).
-      - Bing:   ignora `site:` y devuelve sitios de noticias (0 URLs de IG).
+    Other engines were measured and are not viable for this technique:
+      - Google: 200 but returns the JS consent page (0 URLs).
+      - Bing:   ignores `site:` and returns news sites (0 IG URLs).
     """
 
     def __init__(self, client: HttpClient, engine: str = "ddg") -> None:
@@ -310,10 +310,10 @@ class SerpClient:
         self._engine = engine
 
     def search(self, dork: str) -> tuple[dict[str, str], str]:
-        """Ejecuta un dork. Devuelve ({shortcode: url_serp}, url_serp_usada)."""
+        """Runs a dork. Returns ({shortcode: serp_url}, used_serp_url)."""
         if self._engine == "ddg":
             return self._search_ddg(dork)
-        raise FetchError(f"Motor {self._engine!r} no implementado (ver README).")
+        raise FetchError(f"Engine {self._engine!r} not implemented (see README).")
 
     def _search_ddg(self, dork: str) -> tuple[dict[str, str], str]:
         serp_url = f"{DDG_HTML_URL}?q={dork.replace(' ', '+').replace('"', '%22')}"
@@ -321,9 +321,9 @@ class SerpClient:
 
         low = html.lower()
         if any(m in low for m in CAPTCHA_MARKERS):
-            raise CaptchaError("DDG devolvió verificación/captcha")
+            raise CaptchaError("DDG returned verification/captcha")
 
-        # dict comprehension: dedup conservando el shortcode como clave.
+        # dict comprehension: dedup keeping the shortcode as key.
         return {c: serp_url for c in set(RE_SHORTCODE.findall(html))}, serp_url
 
 
@@ -334,13 +334,13 @@ def discover(
     max_dorks: int,
     delay: tuple[float, float],
 ) -> dict[str, str]:
-    """Fase 1: rota dorks hasta reunir `limit` shortcodes.
+    """Phase 1: rotate dorks until `limit` shortcodes are gathered.
 
-    Devuelve {shortcode: url_de_la_serp_que_lo_reveló}.
+    Returns {shortcode: serp_url_that_revealed_it}.
     """
     discovered: dict[str, str] = {}
     dorks = build_dorks(keyword, max_dorks)
-    LOG.info("Fase 1: %d dorks para %r", len(dorks), keyword)
+    LOG.info("Phase 1: %d dorks for %r", len(dorks), keyword)
 
     for i, dork in enumerate(dorks, start=1):
         if len(discovered) >= limit:
@@ -350,24 +350,24 @@ def discover(
             found, serp_url = serp.search(dork)
             new = {c: u for c, u in found.items() if c not in discovered}
             discovered.update(new)
-            LOG.info("      +%d nuevos (total %d)", len(new), len(discovered))
+            LOG.info("      +%d new (total %d)", len(new), len(discovered))
         except (RateLimitedError, CaptchaError) as exc:
-            LOG.warning("      motor bloqueado (%s); salto este dork", type(exc).__name__)
+            LOG.warning("      engine blocked (%s); skipping this dork", type(exc).__name__)
         except FetchError as exc:
-            LOG.warning("      fallo del dork: %s", exc)
+            LOG.warning("      dork failure: %s", exc)
 
         if i < len(dorks) and len(discovered) < limit:
             time.sleep(random.uniform(*delay))
 
-    LOG.info("Fase 1: %d shortcodes únicos descubiertos", len(discovered))
+    LOG.info("Phase 1: %d unique shortcodes discovered", len(discovered))
     return discovered
 
 
 # --------------------------------------------------------------------------- #
-# Fase 2 - Parseo del embed público
+# Phase 2 - Public embed parsing
 # --------------------------------------------------------------------------- #
 def parse_embed(html: str, shortcode: str, source_serp_url: str) -> InstagramPost:
-    """Extrae autor, caption e imagen del embed público de Instagram."""
+    """Extracts author, caption and image from Instagram's public embed."""
     soup = BeautifulSoup(html, "html.parser")
 
     caption_node = soup.find(class_=re.compile(r"\bCaption\b"))
@@ -404,8 +404,8 @@ def parse_embed(html: str, shortcode: str, source_serp_url: str) -> InstagramPos
 
 
 def _extract_media(soup: BeautifulSoup, author: str | None) -> tuple[Optional[str], bool]:
-    """Foto del post: `img.EmbeddedMediaImage`. El avatar del autor también es un
-    <img> y NO debe confundirse con el post."""
+    """Post photo: `img.EmbeddedMediaImage`. The author's avatar is also an
+    <img> and must NOT be confused with the post."""
     node = soup.select_one("img.EmbeddedMediaImage")
     if node and node.get("src"):
         return node["src"], False
@@ -434,18 +434,18 @@ def _extract_media(soup: BeautifulSoup, author: str | None) -> tuple[Optional[st
 
 
 def is_unavailable(post: InstagramPost, html: str) -> bool:
-    """Soft 404: Instagram devuelve 200 (no 404) con aviso de enlace roto."""
+    """Soft 404: Instagram returns 200 (not 404) with a broken-link notice."""
     if any(m in html for m in SOFT_404_MARKERS):
         return True
     return post.image_url is None and post.caption is None
 
 
 # --------------------------------------------------------------------------- #
-# Fase 3 - Descarga y persistencia
+# Phase 3 - Download and persistence
 # --------------------------------------------------------------------------- #
 def download_image(client: HttpClient, out_dir: Path, post: InstagramPost,
                    overwrite: bool) -> bool:
-    """Descarga la imagen del post a {output_dir}/{shortcode}.jpg."""
+    """Downloads the post's image to {output_dir}/{shortcode}.jpg."""
     if not post.image_url:
         return False
     dest = out_dir / f"{post.shortcode}.jpg"
@@ -455,14 +455,14 @@ def download_image(client: HttpClient, out_dir: Path, post: InstagramPost,
     try:
         data = client.get_bytes(post.image_url)
     except FetchError as exc:
-        LOG.warning("[%s] falló la descarga de imagen: %s", post.shortcode, exc)
+        LOG.warning("[%s] image download failed: %s", post.shortcode, exc)
         return False
     if len(data) < 1024:
-        LOG.warning("[%s] respuesta de imagen sospechosamente chica", post.shortcode)
+        LOG.warning("[%s] suspiciously small image response", post.shortcode)
         return False
     dest.write_bytes(data)
     post.local_image_path = str(dest)
-    LOG.info("[%s] imagen guardada (%d bytes)", post.shortcode, len(data))
+    LOG.info("[%s] image saved (%d bytes)", post.shortcode, len(data))
     return True
 
 
@@ -491,11 +491,11 @@ def run(args: argparse.Namespace) -> list[InstagramPost]:
     posts: list[InstagramPost] = []
 
     try:
-        # Fase 1
+        # Phase 1
         if args.shortcodes:
-            LOG.info("Fase 1: salteada (--shortcodes, %d provistos)", len(args.shortcodes))
+            LOG.info("Phase 1: skipped (--shortcodes, %d provided)", len(args.shortcodes))
             discovered = {
-                sc.strip(): args.source_serp_url or f"(shortcodes provistos manualmente)"
+                sc.strip(): args.source_serp_url or f"(shortcodes provided manually)"
                 for sc in args.shortcodes
             }
         else:
@@ -505,12 +505,12 @@ def run(args: argparse.Namespace) -> list[InstagramPost]:
             )
         stats.discovered = len(discovered)
         if not discovered:
-            print("\nNo se hallaron URLs. ¿Motor bloqueado o keyword demasiado específica?",
+            print("\nNo URLs found. Engine blocked, or keyword too specific?",
                   file=sys.stderr)
             return posts
 
-        # Fase 2
-        LOG.info("Fase 2: %d shortcodes a procesar", len(discovered))
+        # Phase 2
+        LOG.info("Phase 2: %d shortcodes to process", len(discovered))
         for i, (shortcode, serp_url) in enumerate(discovered.items(), start=1):
             LOG.info("  [%d/%d] %s", i, len(discovered), shortcode)
             try:
@@ -521,17 +521,17 @@ def run(args: argparse.Namespace) -> list[InstagramPost]:
                 continue
             except RateLimitedError as exc:
                 stats.failed += 1
-                LOG.error("  rate limit en embed (%s); parando", exc)
+                LOG.error("  rate limit on embed (%s); stopping", exc)
                 break
             except FetchError as exc:
                 stats.failed += 1
-                LOG.warning("  fallo embed: %s", exc)
+                LOG.warning("  embed failure: %s", exc)
                 time.sleep(random.uniform(args.delay_min, args.delay_max))
                 continue
 
             post = parse_embed(html, shortcode, serp_url)
             if is_unavailable(post, html):
-                LOG.warning("  no disponible (privado/eliminado); omito")
+                LOG.warning("  not available (private/deleted); skipping")
                 stats.skipped_unavailable += 1
                 time.sleep(random.uniform(args.delay_min, args.delay_max))
                 continue
@@ -546,7 +546,7 @@ def run(args: argparse.Namespace) -> list[InstagramPost]:
     finally:
         client.close()
 
-    # Fase 3
+    # Phase 3
     meta = write_metadata(posts, stats, keyword, args.search_engine, args.limit, out_dir)
     LOG.info("Metadata -> %s", meta)
     return posts
@@ -558,28 +558,28 @@ def run(args: argparse.Namespace) -> list[InstagramPost]:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ig_serp_scraper.py",
-        description="PoC: descubre posts públicos de Instagram vía indexación SERP "
-                    "(dorks) y extrae datos vía embed público, sin credenciales.",
+        description="PoC: discovers public Instagram posts via SERP indexing "
+                    "(dorks) and extracts data via the public embed, no credentials.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("--query", required=True, help="Keyword o hashtag, ej. 'running shoes'")
-    p.add_argument("--limit", type=int, default=20, help="Máximo de shorts a procesar")
+    p.add_argument("--query", required=True, help="Keyword or hashtag, e.g. 'running shoes'")
+    p.add_argument("--limit", type=int, default=20, help="Max shorts to process")
     p.add_argument("--search-engine", default="ddg", choices=["ddg", "bing", "google"],
-                   help="Motor de SERP (sólo ddg fue viable en pruebas; ver README)")
-    p.add_argument("--output-dir", default=None, help="Salida (por defecto ./output/{slug})")
+                   help="SERP engine (only ddg was viable in testing; see README)")
+    p.add_argument("--output-dir", default=None, help="Output (default ./output/{slug})")
     p.add_argument("--proxy-url", default=None, help="Proxy HTTP/HTTPS/SOCKS5")
     p.add_argument("--max-dorks", type=int, default=8,
-                   help="Máximo de dorks a rotar (cada uno ~+9 shortcodes)")
+                   help="Max dorks to rotate (each one ~+9 shortcodes)")
     p.add_argument("--shortcodes", type=str, default=None,
-                   help="Comma-separated shortcodes: saltear la Fase 1 y procesar "
-                        "directamente. Útil cuando el motor está limitado (DDG 202) "
-                        "o para reprocesar posts ya descubiertos.")
+                   help="Comma-separated shortcodes: skip Phase 1 and process "
+                        "directly. Useful when the engine is rate-limited (DDG 202) "
+                        "or to reprocess already discovered posts.")
     p.add_argument("--source-serp-url", default="",
-                   help="URL de SERP a atribuir cuando se saltea la Fase 1 con --shortcodes")
-    p.add_argument("--delay-min", type=float, default=8.0, help="Delay mínimo (s)")
-    p.add_argument("--delay-max", type=float, default=15.0, help="Delay máximo (s)")
-    p.add_argument("--timeout", type=float, default=25.0, help="Timeout HTTP (s)")
-    p.add_argument("--overwrite", action="store_true", help="Re-descargar imágenes")
+                   help="SERP URL to attribute when Phase 1 is skipped with --shortcodes")
+    p.add_argument("--delay-min", type=float, default=8.0, help="Minimum delay (s)")
+    p.add_argument("--delay-max", type=float, default=15.0, help="Maximum delay (s)")
+    p.add_argument("--timeout", type=float, default=25.0, help="HTTP timeout (s)")
+    p.add_argument("--overwrite", action="store_true", help="Re-download images")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
@@ -596,24 +596,24 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     )
     if args.search_engine != "ddg":
         LOG.warning(
-            "El motor %r fue medido como NO viable para esta técnica "
-            "(Google devuelve la página de consentimiento; Bing ignora `site:`). "
-            "Se usará ddg.", args.search_engine,
+            "Engine %r was measured as NOT viable for this technique "
+            "(Google returns the consent page; Bing ignores `site:`). "
+            "ddg will be used.", args.search_engine,
         )
         args.search_engine = "ddg"
     if args.delay_max < args.delay_min:
-        print("Error: --delay-max debe ser >= --delay-min.", file=sys.stderr)
+        print("Error: --delay-max must be >= --delay-min.", file=sys.stderr)
         return 2
 
     LOG.info("query=%r limit=%d engine=%s", args.query, args.limit, args.search_engine)
     posts = run(args)
 
     if not posts:
-        print("\n0 posts. Causas probables: motor limitado (DDG responde 202), "
-              "keyword sin resultados indexados, o IP bloqueada (usá --proxy-url).",
+        print("\n0 posts. Likely causes: rate-limited engine (DDG replies 202), "
+              "keyword with no indexed results, or blocked IP (use --proxy-url).",
               file=sys.stderr)
         return 1
-    LOG.info("Listo: %d posts, %d imágenes", len(posts),
+    LOG.info("Done: %d posts, %d images", len(posts),
              sum(1 for p in posts if p.local_image_path))
     return 0
 

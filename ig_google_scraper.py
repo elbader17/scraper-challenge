@@ -1,46 +1,46 @@
 #!/usr/bin/env python3
 """
-Prueba de Concepto: posts de Instagram indexados en GOOGLE, sin login.
+Proof of Concept: Instagram posts indexed in GOOGLE, no login.
 
-    Google SERP  --(dork site:instagram.com/p/ + start=N)-->  URLs indexadas
+    Google SERP  --(dork site:instagram.com/p/ + start=N)-->   indexed URLs
                                                                     |
                                                              shortcodes
                                                                     |
-        https://www.instagram.com/p/{code}/embed/captioned/  -->  datos + foto
+        https://www.instagram.com/p/{code}/embed/captioned/  -->  data + photo
 
-Por qué Google y no DuckDuckGo (`ig_serp_scraper.py`):
+Why Google and not DuckDuckGo (`ig_serp_scraper.py`):
 
-  * Google SOPORTA paginación real con `start=0,100,200...` y `num=100`.
-    DDG no: `&s=10` devuelve HTTP 202. Esta es la ventaja estructural.
-  * Google indexa mucho más contenido de Instagram que DDG, así que el techo
-    de ~10 shortcodes por consulta se levanta.
+  * Google SUPPORTS real pagination with `start=0,100,200...` and `num=100`.
+    DDG does not: `&s=10` returns HTTP 202. This is the structural advantage.
+  * Google indexes far more Instagram content than DDG, so the ceiling of
+    ~10 shortcodes per query is lifted.
 
-Lo que se midió en la práctica desde una IP de datacenter (ver `findings()`):
+What was measured in practice from a datacenter IP (see `findings()`):
 
-  1. La vía HTTP (curl_cffi con TLS de Chrome) devuelve la SERP de Google como
-     un SHELL que exige JavaScript: ~92 KB, 3 anclas, cero resultados.
-     Es un 200, no un error, así que un scraper ingenuo reporta "0 resultados"
-     cuando en realidad nunca vio la SERP. `JS_SHELL_MARKERS` lo detecta.
-  2. Con Chromium headless (`--render`) el DOM sí se renderiza, pero Google
-     responde CAPTCHA ("unusual traffic") al vuelo de IP de datacenter.
-     `CAPTCHA_MARKERS` lo detecta.
-  3. Conclusión: Google no es accesible desde una IP de datacenter/proxy de
-     centro de datos. Hace falta un proxy RESIDENCIAL o MÓVIL con buena
-     reputación. `--proxy-url` ya lo soporta; sin proxy, el script falla
-     con un mensaje explícito en lugar de fingir que no encontró nada.
+  1. The HTTP path (curl_cffi with Chrome TLS) returns the Google SERP as a
+     SHELL that requires JavaScript: ~92 KB, 3 anchors, zero results.
+     It is a 200, not an error, so a naive scraper reports "0 results"
+     when it actually never saw the SERP. `JS_SHELL_MARKERS` detects it.
+  2. With headless Chromium (`--render`) the DOM does render, but Google
+     answers with a CAPTCHA ("unusual traffic") on the fly for a datacenter IP.
+     `CAPTCHA_MARKERS` detects it.
+  3. Conclusion: Google is not accessible from a datacenter/center data-center
+     IP. A RESIDENTIAL or MOBILE proxy with good reputation is required.
+     `--proxy-url` already supports it; without a proxy, the script fails
+     with an explicit message instead of pretending it found nothing.
 
-Los TLD (`google.es`, `.com.ar`, `.co.uk`, `.ca`, `.mx`) responden idéntico:
-el bloqueo es por IP, no por dominio. `--tld` sólo sirve para ajustar región.
+The TLDs (`google.es`, `.com.ar`, `.co.uk`, `.ca`, `.mx`) respond identically:
+the block is by IP, not by domain. `--tld` only serves to adjust the region.
 
-Uso:
-    # Requiere proxy residencial; sin él Google responde CAPTCHA.
+Usage:
+    # Requires a residential proxy; without it Google answers CAPTCHA.
     python ig_google_scraper.py --query "running shoes" --limit 30 \
-        --proxy-url http://usuario:clave@host:puerto
+        --proxy-url http://user:pass@host:port
 
-    # Render real con Chromium (además del proxy, para cuando el shell JS aparece)
+    # Real render with Chromium (in addition to the proxy, for when the JS shell appears)
     python ig_google_scraper.py --query sneakers --limit 20 --render
 
-    # Sin Google: shortcodes ya conocidos -> va directo al embed
+    # Without Google: already-known shortcodes -> goes straight to the embed
     python ig_google_scraper.py --query sneakers --shortcodes DYHxVb0iEI2,DceGJtwimbX
 """
 
@@ -72,18 +72,18 @@ from ig_google_store import PostStore  # noqa: E402
 try:
     from bs4 import BeautifulSoup  # type: ignore
 except ImportError:  # pragma: no cover
-    sys.exit("Falta beautifulsoup4 ->  pip install -r requirements.txt")
+    sys.exit("Missing beautifulsoup4 ->  pip install -r requirements.txt")
 
 try:
     from pydantic import BaseModel, Field, field_validator  # type: ignore
 except ImportError:  # pragma: no cover
-    sys.exit("Falta pydantic ->  pip install -r requirements.txt")
+    sys.exit("Missing pydantic ->  pip install -r requirements.txt")
 
 
 LOG: logging.Logger = logging.getLogger("google_scraper")
 
 # --------------------------------------------------------------------------- #
-# Constantes
+# Constants
 # --------------------------------------------------------------------------- #
 USER_AGENT: Final[str] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -91,8 +91,8 @@ USER_AGENT: Final[str] = (
 )
 EMBED_URL: Final[str] = "https://www.instagram.com/p/{shortcode}/embed/captioned/"
 
-# Shortcode de Instagram. Google envuelve los enlaces en /url?q=..., y a veces
-# van percent-encoded, por eso se aplica `unquote` antes de aplicar el patrón.
+# Instagram shortcode. Google wraps links in /url?q=..., and sometimes they
+# come percent-encoded, hence `unquote` is applied before applying the pattern.
 RE_SHORTCODE: Final[re.Pattern[str]] = re.compile(
     r"instagram\.com/(?:p|reel|tv)/([A-Za-z0-9_\-]{10,12})(?![A-Za-z0-9_\-])"
 )
@@ -102,7 +102,7 @@ RE_AUTHOR_LINK: Final[re.Pattern[str]] = re.compile(
 RE_AUTHOR_ALT: Final[re.Pattern[str]] = re.compile(
     r"Instagram post shared by @([A-Za-z0-9._]+)"
 )
-# Avatar del autor: nunca es la foto del post.
+# Author avatar: it is never the post photo.
 RE_AVATAR_CDN: Final[re.Pattern[str]] = re.compile(r"/t51\.2885-19/")
 RE_COMMENTS_TAIL: Final[re.Pattern[str]] = re.compile(
     r"\s*View all ([\d.,]+[KkMm]? )?comments?\.?\s*$", re.IGNORECASE
@@ -113,11 +113,11 @@ SOFT_404_MARKERS: Final[tuple[str, ...]] = (
     "This page isn't available",
     "Sorry, this page isn't available",
 )
-# Google responde 200 con un aviso de tráfico automatizado, no 429.
-# OJO: NO se usa "/sorry/index" como marcador. Esa ruta aparece enlazada en
-# una SERP normal, y producía un falso positivo que hacía esperar un captcha
-# inexistente (medido: SERP legítima con 11 shortcodes marcada como bloqueada).
-# La detección precisa de la ruta se hace aparte con `location.pathname`.
+# Google answers 200 with an automated-traffic notice, not 429.
+# CAREFUL: "/sorry/index" is NOT used as a marker. That path appears linked in
+# a normal SERP, and it produced a false positive that made us wait for a
+# nonexistent captcha (measured: legitimate SERP with 11 shortcodes flagged as
+# blocked). Precise detection of the path is done separately with `location.pathname`.
 CAPTCHA_MARKERS: Final[tuple[str, ...]] = (
     "our systems have detected unusual traffic",
     "detected unusual traffic",
@@ -126,19 +126,19 @@ CAPTCHA_MARKERS: Final[tuple[str, ...]] = (
     "are you a robot",
     "to continue, please type the characters",
 )
-# Google sirve la SERP como shell que exige JS. Un 200 con estas marcas significa
-# "nunca vi la SERP", que es distinto de "no hay resultados".
+# Google serves the SERP as a shell that requires JS. A 200 with these markers
+# means "I never saw the SERP", which is different from "there are no results".
 JS_SHELL_MARKERS: Final[tuple[str, ...]] = (
     "enable javascript on your web browser",
     "before you continue",
     "javascript is disabled",
 )
-# Una SERP real de Google trae decenas de anclas de resultado incluso cuando no
-# encuentra nada. Los shells y el CAPTCHA traen 3-5. Umbral conservador.
+# A real Google SERP brings dozens of result anchors even when it finds
+# nothing. The shells and the CAPTCHA bring 3-5. Conservative threshold.
 MIN_RESULT_ANCHORS: Final[int] = 10
 
-# Rotación de dorks. Cada plantilla devuelve un conjunto distinto, así que es
-# el mecanismo complementario cuando la paginación por `start` se agota.
+# Dork rotation. Each template returns a different set, so it is
+# the complementary mechanism when `start` pagination runs out.
 DORK_TEMPLATES: Final[tuple[str, ...]] = (
     'site:instagram.com/p/ "{kw}"',
     'site:instagram.com/reel/ "{kw}"',
@@ -158,7 +158,7 @@ DORK_TEMPLATES: Final[tuple[str, ...]] = (
 
 
 # --------------------------------------------------------------------------- #
-# Modelos de datos
+# Data models
 # --------------------------------------------------------------------------- #
 class InstagramPost(BaseModel):
     shortcode: str
@@ -166,15 +166,15 @@ class InstagramPost(BaseModel):
     caption: Optional[str] = None
     image_url: Optional[str] = None
     local_image_path: Optional[str] = None
-    # URL de la SERP que reveló este shortcode: trazabilidad del descubrimiento.
+    # SERP URL that revealed this shortcode: discovery traceability.
     source_serp_url: str
     scraped_at: datetime
     is_video: bool = False
     source_engine: str = "google"
 
-    # --- Metadata enriquecida (blob GraphQL del embed) ---
-    # Viene en el `contextJSON`. Es null cuando Instagram sirve el embed
-    # "liviano" (isRichEmbed=false), lo cual se midió en 2 de 12 posts.
+    # --- Enriched metadata (embed GraphQL blob) ---
+    # It comes in the `contextJSON`. It is null when Instagram serves the "light"
+    # embed (isRichEmbed=false), which was measured in 2 of 12 posts.
     rich_metadata: bool = False
     media_id: Optional[int] = None
     likes: Optional[int] = None
@@ -184,13 +184,13 @@ class InstagramPost(BaseModel):
     author_verified: Optional[bool] = None
     width: Optional[int] = None
     height: Optional[int] = None
-    # Alt-text que genera Instagram. Muy útil para filtrado semántico.
+    # Alt-text that Instagram generates. Very useful for semantic filtering.
     alt_text: Optional[str] = None
     carousel_count: int = 0
     carousel_shortcodes: list[str] = Field(default_factory=list)
 
-    # Fecha INFERIDA: decodificada del media ID, no un campo oficial.
-    # El embed ya no expone `taken_at` en ninguna variante sin login.
+    # INFERRED date: decoded from the media ID, not an official field.
+    # The embed no longer exposes `taken_at` in any variant without login.
     post_published_at: Optional[datetime] = None
     post_published_at_inferred: bool = False
 
@@ -206,8 +206,8 @@ class ScrapeStats(BaseModel):
     queries_executed: int = 0
     blocked_queries: int = 0
     js_shell_queries: int = 0
-    # Un 429 NO es lo mismo que "sin resultados": son contadores separados a
-    # propósito, porque el mensaje final tiene que decir la verdad.
+    # A 429 is NOT the same as "no results": they are separate counters on
+    # purpose, because the final message has to tell the truth.
     rate_limited_queries: int = 0
     discovered: int = 0
     processed: int = 0
@@ -229,18 +229,18 @@ class MetadataFile(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Excepciones
+# Exceptions
 # --------------------------------------------------------------------------- #
 class FetchError(RuntimeError):
-    """Fallo recuperable en una descarga."""
+    """Recoverable failure on a download."""
 
 
 class NotFoundError(FetchError):
-    """HTTP 404 - recurso inexistente."""
+    """HTTP 404 - non-existent resource."""
 
 
 class RateLimitedError(FetchError):
-    """HTTP 429 - límite de tasa."""
+    """HTTP 429 - rate limit."""
 
     def __init__(self, message: str, retry_after: Optional[float] = None) -> None:
         super().__init__(message)
@@ -248,7 +248,7 @@ class RateLimitedError(FetchError):
 
 
 def parse_retry_after(value: Optional[str]) -> Optional[float]:
-    """`Retry-After` en segundos, o fecha HTTP (RFC 7231). Devuelve segundos."""
+    """`Retry-After` in seconds, or HTTP date (RFC 7231). Returns seconds."""
     if not value:
         return None
     value = value.strip()
@@ -265,24 +265,24 @@ def parse_retry_after(value: Optional[str]) -> Optional[float]:
         if when.tzinfo is None:
             when = when.replace(tzinfo=_tz.utc)
         return max(0.0, (when - datetime.now(_tz.utc)).total_seconds())
-    except Exception:  # noqa: BLE001 - header malformado: se ignora
+    except Exception:  # noqa: BLE001 - malformed header: ignored
         return None
 
 
 class CaptchaError(FetchError):
-    """Google respondió con verificación humana / bloqueo por reputación de IP."""
+    """Google answered with human verification / IP reputation block."""
 
 
 class JsShellError(FetchError):
-    """Google devolvió el shell que exige JavaScript, no la SERP."""
+    """Google returned the shell that requires JavaScript, not the SERP."""
 
 
 class IpBlockedError(FetchError):
-    """Ninguna consulta pudo completarse por bloqueo de IP."""
+    """No query could be completed due to an IP block."""
 
 
 # --------------------------------------------------------------------------- #
-# Transporte HTTP
+# HTTP transport
 # --------------------------------------------------------------------------- #
 def _headers(engine: str) -> dict[str, str]:
     h = {
@@ -312,17 +312,17 @@ class HttpClient(Protocol):
 
 
 class CurlCffiClient:
-    """Transporte con impersonación de TLS de Chrome (JA3/JA4 reales)."""
+    """Transport with Chrome TLS impersonation (real JA3/JA4)."""
 
     def __init__(self, proxy_url: Optional[str] = None, timeout: float = 25.0,
                  cookies: Optional[dict[str, str]] = None) -> None:
-        from curl_cffi import requests as cc  # import perezoso
+        from curl_cffi import requests as cc  # lazy import
 
         proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
         self._s = cc.Session(impersonate="chrome", proxies=proxies, timeout=timeout)
         if cookies:
-            # NID/SNID/GOOGLE_ABUSE_EXEMPTION: sin estas cookies Google sirve el
-            # shell de JS o el CAPTCHA aunque el TLS sea perfecto (medido).
+            # NID/SNID/GOOGLE_ABUSE_EXEMPTION: without these cookies Google serves
+            # the JS shell or the CAPTCHA even if the TLS is perfect (measured).
             self._s.cookies.update(cookies)
 
     def get_text(self, url: str, *, params: Optional[dict[str, str]] = None,
@@ -339,22 +339,22 @@ class CurlCffiClient:
     @staticmethod
     def _check(status: int, url: str, retry_after: Optional[str] = None) -> None:
         if status == 429:
-            raise RateLimitedError(f"HTTP 429 en {url}", parse_retry_after(retry_after))
+            raise RateLimitedError(f"HTTP 429 on {url}", parse_retry_after(retry_after))
         if status == 404:
-            raise NotFoundError(f"404 en {url}")
+            raise NotFoundError(f"404 on {url}")
         if status >= 400:
-            raise FetchError(f"HTTP {status} en {url}")
+            raise FetchError(f"HTTP {status} on {url}")
 
     def close(self) -> None:
         self._s.close()
 
 
 class HttpxClient:
-    """Respaldo si curl_cffi no está disponible."""
+    """Fallback if curl_cffi is not available."""
 
     def __init__(self, proxy_url: Optional[str] = None, timeout: float = 25.0,
                  cookies: Optional[dict[str, str]] = None) -> None:
-        import httpx  # import perezoso
+        import httpx  # lazy import
 
         self._s = httpx.Client(timeout=timeout, follow_redirects=True, proxy=proxy_url)
         if cookies:
@@ -378,16 +378,16 @@ class HttpxClient:
 def build_client(proxy_url: Optional[str], timeout: float,
                  cookies: Optional[dict[str, str]] = None) -> HttpClient:
     if proxy_url:
-        LOG.info("Proxy activo: %s", re.sub(r"//[^@/]*@", "//***:***@", proxy_url))
+        LOG.info("Proxy active: %s", re.sub(r"//[^@/]*@", "//***:***@", proxy_url))
     try:
         return CurlCffiClient(proxy_url, timeout, cookies)
     except Exception as exc:  # noqa: BLE001
-        LOG.warning("curl_cffi no disponible (%s); uso httpx", exc)
+        LOG.warning("curl_cffi not available (%s); using httpx", exc)
         return HttpxClient(proxy_url, timeout, cookies)
 
 
 # --------------------------------------------------------------------------- #
-# Render con Chromium (para cuando Google devuelve el shell JS)
+# Rendering with Chromium (for when Google returns the JS shell)
 # --------------------------------------------------------------------------- #
 CHROMIUM_CANDIDATES: Final[tuple[str, ...]] = (
     "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "chrome",
@@ -404,15 +404,15 @@ def find_chromium() -> Optional[str]:
 
 def render_dom(url: str, proxy_url: Optional[str] = None,
                budget_ms: int = 20000) -> str:
-    """Renderiza la URL con Chromium headless y devuelve el DOM resultante.
+    """Renders the URL with headless Chromium and returns the resulting DOM.
 
-    Chromium tiene su propio stack anti-bot: algunos fingerprints pasan y otros
-    disparan el CAPTCHA igual. No es un sustituto del proxy, sólo un complemento.
+    Chromium has its own anti-bot stack: some fingerprints pass and others
+    trigger the CAPTCHA anyway. It is not a substitute for the proxy, only a complement.
     """
     binary = find_chromium()
     if not binary:
         raise FetchError(
-            "No se encontró Chromium/Chrome para --render. Instalalo o usá la vía HTTP."
+            "Chromium/Chrome not found for --render. Install it or use the HTTP path."
         )
     profile = tempfile.mkdtemp(prefix="iggoogle-")
     cmd = [
@@ -426,24 +426,24 @@ def render_dom(url: str, proxy_url: Optional[str] = None,
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=budget_ms / 1000 + 60)
     except subprocess.TimeoutExpired as exc:
-        raise FetchError(f"Chromium tardó demasiado: {exc}") from exc
+        raise FetchError(f"Chromium took too long: {exc}") from exc
     finally:
         shutil.rmtree(profile, ignore_errors=True)
     dom = proc.stdout.decode("utf-8", errors="replace")
     if not dom.strip():
-        raise FetchError("Chromium no devolvió DOM (posible crash o bloqueo).")
+        raise FetchError("Chromium returned no DOM (possible crash or block).")
     return dom
 
 
 # --------------------------------------------------------------------------- #
-# Modo interactivo: Chrome real, con ventana, controlado por CDP
+# Interactive mode: real Chrome, with a window, controlled via CDP
 # --------------------------------------------------------------------------- #
 def find_wayland_socket() -> Optional[tuple[str, str]]:
-    """Busca un socket Wayland del sistema. Devuelve (WAYLAND_DISPLAY, XDG_RUNTIME_DIR).
+    """Looks for a system Wayland socket. Returns (WAYLAND_DISPLAY, XDG_RUNTIME_DIR).
 
-    Hace falta porque en un shell de agente las variables del compositor no
-    suelen estar exportadas, y X11 sin `XAUTHORITY` rechaza la conexión con
-    "Authorization required" (medido en niri/Xwayland).
+    It is needed because in an agent shell the compositor variables are
+    usually not exported, and X11 without `XAUTHORITY` rejects the connection
+    with "Authorization required" (measured on niri/Xwayland).
     """
     if os.environ.get("WAYLAND_DISPLAY"):
         return os.environ["WAYLAND_DISPLAY"], os.environ.get("XDG_RUNTIME_DIR", "")
@@ -456,28 +456,28 @@ def find_wayland_socket() -> Optional[tuple[str, str]]:
 
 
 class CdpBrowser:
-    """Chrome headful real, controlado por el Chrome DevTools Protocol.
+    """Real headful Chrome, controlled through the Chrome DevTools Protocol.
 
-    Es la única vía donde una persona puede resolver el CAPTCHA: Google lo sirve
-    como una página normal, así que alcanza con abrir la ventana, hacer el
-    challenge a mano y dejar que el script siga leyendo el DOM.
+    This is the only path where a person can solve the CAPTCHA: Google serves it
+    as a normal page, so it is enough to open the window, do the challenge by hand
+    and let the script keep reading the DOM.
 
-    Se usa un perfil persistente para que las cookies sobrevivan entre corridas:
-    una vez resuelto el CAPTCHA, las consultas siguientes no lo vuelven a pedir.
+    A persistent profile is used so the cookies survive between runs: once the
+    CAPTCHA is solved, subsequent queries do not ask for it again.
     """
 
     def __init__(self, profile_dir: Optional[str] = None, port: int = 9222,
                  proxy_url: Optional[str] = None, wait_captcha: int = 180) -> None:
         self._binary = find_chromium()
         if not self._binary:
-            raise FetchError("No se encontró Chromium/Chrome para --interactive.")
+            raise FetchError("Chromium/Chrome not found for --interactive.")
         self._profile = profile_dir or str(Path.home() / ".ig_google_profile")
         self._port = port
         self._proxy = proxy_url
         self._wait_captcha = wait_captcha
         self._proc: Optional[subprocess.Popen] = None
 
-    # -- ciclo de vida ----------------------------------------------------
+    # -- lifecycle --------------------------------------------------------
     def start(self) -> None:
         Path(self._profile).mkdir(parents=True, exist_ok=True)
         wayland = find_wayland_socket()
@@ -492,9 +492,9 @@ class CdpBrowser:
         if self._proxy:
             cmd.append(f"--proxy-server={self._proxy}")
 
-        # Se prefiere Wayland: la sesión puede ser X11 con XAUTHORITY inaccesible,
-        # en cuyo caso Chrome muere con "Authorization required, but no
-        # authorization protocol specified". Wayland no necesita ese cookie.
+        # Wayland is preferred: the session may be X11 with an inaccessible
+        # XAUTHORITY, in which case Chrome dies with "Authorization required, but no
+        # authorization protocol specified". Wayland does not need that cookie.
         log = Path(tempfile.gettempdir()) / "ig_google_chrome.log"
         attempts: list[tuple[dict[str, str], list[str]]] = []
         if wayland:
@@ -504,7 +504,7 @@ class CdpBrowser:
             if runtime_dir:
                 wl_env["XDG_RUNTIME_DIR"] = runtime_dir
             attempts.append((wl_env, ["--ozone-platform=wayland"]))
-        # Respaldo: X11 tal cual, por si en otro entorno sí funcione.
+        # Fallback: X11 as is, in case it works in some other environment.
         attempts.append((dict(os.environ), []))
 
         for env, extra in attempts:
@@ -516,18 +516,18 @@ class CdpBrowser:
             try:
                 self._wait_ready(timeout=25)
                 self._proc = proc
-                LOG.info("Chrome listo (%s). Perfil: %s",
+                LOG.info("Chrome ready (%s). Profile: %s",
                          "wayland" if extra else "x11", self._profile)
                 return
             except FetchError as exc:
                 proc.terminate()
-                LOG.debug("  arranque falló (%s): %s", extra or ["x11"], exc)
+                LOG.debug("  startup failed (%s): %s", extra or ["x11"], exc)
 
         tail = ""
         if log.exists():
             tail = log.read_text(errors="replace").strip().splitlines()[-3:]
         raise FetchError(
-            "Chrome no arrancó. Últimas líneas del log:\n" + "\n".join(tail)
+            "Chrome did not start. Last log lines:\n" + "\n".join(tail)
         )
 
     def _wait_ready(self, timeout: float = 30.0) -> None:
@@ -539,9 +539,9 @@ class CdpBrowser:
                 ) as r:
                     if r.status == 200:
                         return
-            except Exception:  # noqa: BLE001 - aún no arrancó
+            except Exception:  # noqa: BLE001 - not up yet
                 time.sleep(0.5)
-        raise FetchError("Chrome no respondió en el puerto de depuración.")
+        raise FetchError("Chrome did not respond on the debugging port.")
 
     def stop(self) -> None:
         if self._proc and self._proc.poll() is None:
@@ -551,7 +551,7 @@ class CdpBrowser:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
 
-    # -- navegación -------------------------------------------------------
+    # -- navigation -------------------------------------------------------
     async def _eval(self, tab_ws: Any, expression: str, asyncio: Any,
                     websockets: Any) -> Any:
         async with websockets.connect(tab_ws, max_size=64 * 1024 * 1024) as ws:
@@ -574,20 +574,20 @@ class CdpBrowser:
                              {"expression": expression, "returnByValue": True})
 
     def solve_and_export(self, probe_url: str) -> dict[str, str]:
-        """Abre la búsqueda, espera a que el usuario resuelva el CAPTCHA y
-        devuelve las cookies de Google para reutilizarlas por HTTP.
+        """Opens the search, waits for the user to solve the CAPTCHA and
+        returns the Google cookies so they can be reused over HTTP.
 
-        Es la pieza que hace viable todo lo demás: sin un navegador real que
-        resuelva el challenge, Google devuelve shell de JS o CAPTCHA. Con las
-        cookies resultantes, curl_cffialone ya recibe la SERP completa.
+        This is the piece that makes everything else viable: without a real browser
+        that solves the challenge, Google returns a JS shell or a CAPTCHA. With the
+        resulting cookies, curl_cffi alone already receives the full SERP.
         """
         try:
-            import asyncio  # import perezoso
+            import asyncio  # lazy import
 
             import websockets  # type: ignore
         except ImportError:  # pragma: no cover
             raise FetchError(
-                "El modo --interactive necesita 'websockets' -> "
+                "--interactive mode requires 'websockets' -> "
                 "pip install websockets"
             ) from None
 
@@ -637,26 +637,26 @@ class CdpBrowser:
                     if not html:
                         continue
                     low = html.lower()
-                    # La ruta /sorry es la señal fiable del challenge; el texto
-                    # "unusual traffic" sirve de respaldo.
+                    # The /sorry path is the reliable challenge signal; the
+                    # "unusual traffic" text serves as a fallback.
                     if path.startswith("/sorry") or any(m in low for m in CAPTCHA_MARKERS):
                         if not warned:
                             LOG.warning(
-                                "  Google pide verificación. Resolvela en la ventana de "
-                                "Chrome que se acaba de abrir (tienes %ds); el script "
-                                "sigue solo.", self._wait_captcha,
+                                "  Google asks for verification. Solve it in the "
+                                "Chrome window that just opened (you have %ds); the "
+                                "script keeps going on its own.", self._wait_captcha,
                             )
                             warned = True
                         continue
                     if len(re.findall(r"<a\s", low)) < MIN_RESULT_ANCHORS:
-                        continue  # todavía no renderizó la SERP
-                    LOG.info("  SERP cargada (%d shortcodes); exportando cookies…",
+                        continue  # it has not rendered the SERP yet
+                    LOG.info("  SERP loaded (%d shortcodes); exporting cookies…",
                              len(extract_shortcodes(html)))
                     break
                 else:
                     raise CaptchaError(
-                        f"La verificación no se resolvió en {self._wait_captcha}s. "
-                        "Volvé a correr: el perfil conserva lo ya resuelto."
+                        f"Verification was not solved within {self._wait_captcha}s. "
+                        "Run it again: the profile keeps what was already solved."
                     )
 
                 res = await cmd("Network.getAllCookies")
@@ -664,7 +664,7 @@ class CdpBrowser:
                     c["name"]: c["value"] for c in res.get("cookies", [])
                     if "google" in c.get("domain", "") and c.get("value")
                 }
-                LOG.info("  Cookies obtenidas: %s", ", ".join(sorted(jar)))
+                LOG.info("  Cookies obtained: %s", ", ".join(sorted(jar)))
                 return jar
         finally:
             with contextlib.suppress(Exception):
@@ -673,18 +673,18 @@ class CdpBrowser:
                 ).close()
 
     def fetch(self, url: str, poll_seconds: float = 3.0) -> str:
-        """Abre la URL y devuelve el DOM una vez que hay shortcodes.
+        """Opens the URL and returns the DOM once there are shortcodes.
 
-        Si Google sirve CAPTCHA, avisa y sigue esperando: el usuario lo resuelve
-        en la ventana y el polling sigue hasta encontrar resultados.
+        If Google serves a CAPTCHA, it warns and keeps waiting: the user solves it
+        in the window and polling continues until results are found.
         """
         try:
-            import asyncio  # import perezoso
+            import asyncio  # lazy import
 
             import websockets  # type: ignore
         except ImportError:  # pragma: no cover
             raise FetchError(
-                "El modo --interactive necesita 'websockets' -> "
+                "--interactive mode requires 'websockets' -> "
                 "pip install websockets"
             ) from None
 
@@ -731,26 +731,26 @@ class CdpBrowser:
                     if not html:
                         continue
                     if extract_shortcodes(html):
-                        LOG.info("  SERP lista: %d shortcodes",
+                        LOG.info("  SERP ready: %d shortcodes",
                                  len(extract_shortcodes(html)))
                         return html
                     low = html.lower()
                     if any(m in low for m in CAPTCHA_MARKERS):
                         if not warned:
                             LOG.warning(
-                                "  Google pide CAPTCHA. Resolvelo en la ventana de "
-                                "Chrome que se acaba de abrir; el script sigue solo "
-                                "(hasta %ds).", self._wait_captcha,
+                                "  Google asks for a CAPTCHA. Solve it in the "
+                                "Chrome window that just opened; the script keeps "
+                                "going on its own (up to %ds).", self._wait_captcha,
                             )
                             warned = True
                         continue
                     if any(m in low for m in JS_SHELL_MARKERS):
                         raise JsShellError(
-                            "La ventana de Chrome no renderizó la SERP (shell JS)."
+                            "The Chrome window did not render the SERP (JS shell)."
                         )
                 raise CaptchaError(
-                    f"El CAPTCHA no se resolvió en {self._wait_captcha}s. "
-                    "Volvé a correr; el perfil ya conserva lo que se resolvió."
+                    f"The CAPTCHA was not solved within {self._wait_captcha}s. "
+                    "Run it again; the profile already keeps what was solved."
                 )
         finally:
             with contextlib.suppress(Exception):
@@ -760,10 +760,10 @@ class CdpBrowser:
 
 
 # --------------------------------------------------------------------------- #
-# Fase 1 - Descubrimiento en Google
+# Phase 1 - Discovery in Google
 # --------------------------------------------------------------------------- #
 def build_queries(keyword: str, max_queries: int) -> list[str]:
-    """Rotación de dorks: cada plantilla consulta un conjunto distinto."""
+    """Dork rotation: each template queries a different set."""
     kw = keyword.strip().strip('"')
     seen: list[str] = []
     for tpl in DORK_TEMPLATES:
@@ -776,10 +776,10 @@ def build_queries(keyword: str, max_queries: int) -> list[str]:
 
 
 def extract_shortcodes(html: str) -> set[str]:
-    """Saca shortcodes del HTML de la SERP.
+    """Extracts shortcodes from the SERP HTML.
 
-    Google envuelve los enlaces en `/url?q=...` y a veces percent-encoda el
-    destino, así que se busca sobre el texto decodificado y sobre el original.
+    Google wraps links in `/url?q=...` and sometimes percent-encodes the
+    destination, so the search is done over the decoded text and the original.
     """
     found = set(RE_SHORTCODE.findall(html))
     if "%3A%2F%2F" in html or "%2F" in html:
@@ -788,7 +788,7 @@ def extract_shortcodes(html: str) -> set[str]:
 
 
 def build_serp_url(tld: str, query: str, start: int, num: int) -> str:
-    """URL de la SERP de Google. `pws=0` desactiva la personalización por cookie."""
+    """Google SERP URL. `pws=0` disables cookie-based personalization."""
     return (
         f"https://www.google.{tld}/search?q={quote_plus(query)}"
         f"&start={start}&num={num}&hl=en&pws=0&filter=0"
@@ -796,7 +796,7 @@ def build_serp_url(tld: str, query: str, start: int, num: int) -> str:
 
 
 class GoogleSerpClient:
-    """Cliente de la SERP de Google."""
+    """Google SERP client."""
 
     def __init__(self, client: HttpClient, tld: str = "com",
                  render: bool = False, proxy_url: Optional[str] = None,
@@ -812,11 +812,11 @@ class GoogleSerpClient:
         return build_serp_url(self._tld, query, start, num)
 
     def search(self, query: str, start: int = 0, num: int = 100) -> tuple[set[str], str]:
-        """Ejecuta una consulta. Devuelve (shortcodes, url_serp)."""
+        """Runs one query. Returns (shortcodes, url_serp)."""
         serp_url = self._build_url(query, start, num)
 
         if self._browser is not None:
-            # Modo interactivo: el CAPTCHA se resuelve a mano en la ventana.
+            # Interactive mode: the CAPTCHA is solved by hand in the window.
             html = self._browser.fetch(serp_url)
         elif self._render:
             html = render_dom(serp_url, self._proxy)
@@ -826,25 +826,25 @@ class GoogleSerpClient:
         low = html.lower()
         if any(m in low for m in CAPTCHA_MARKERS):
             raise CaptchaError(
-                "Google respondió CAPTCHA/bloqueo por reputación de IP "
-                "('unusual traffic'). Hace falta un proxy residencial o móvil."
+                "Google answered with a CAPTCHA/IP reputation block "
+                "('unusual traffic'). A residential or mobile proxy is required."
             )
 
         codes = extract_shortcodes(html)
 
-        # Un 200 que NO es la SERP no es "no hay resultados": es "nunca vi la
-        # SERP". Google alterna entre dos respuestas no-SERP:
-        #   a) el shell "please enable javascript on your web browser"
-        #   b) el CAPTCHA "unusual traffic"
-        # y una SERP real siempre trae decenas de anclas de resultado, incluso
-        # cuando no encuentra nada. El conteo de anclas es la señal estructural
-        # que no depende del texto exacto con el que Google Localiza el aviso.
+        # A 200 that is NOT the SERP is not "no results": it is "never saw
+        # the SERP". Google alternates between two non-SERP responses:
+        #   a) the "please enable javascript on your web browser" shell
+        #   b) the "unusual traffic" CAPTCHA
+        # and a real SERP always brings dozens of result anchors, even
+        # when it finds nothing. The anchor count is the structural signal
+        # that does not depend on the exact text Google localizes the notice with.
         anchors = len(re.findall(r"<a\s", low))
         if not codes and (any(m in low for m in JS_SHELL_MARKERS) or anchors < MIN_RESULT_ANCHORS):
             raise JsShellError(
-                f"Google no devolvió la SERP (0 shortcodes, sólo {anchors} anclas; "
-                f"html={len(html)}B). Es el shell de JS o un bloqueo, no cero "
-                f"resultados. Reintentá con --render o con un proxy residencial."
+                f"Google did not return the SERP (0 shortcodes, only {anchors} anchors; "
+                f"html={len(html)}B). It is the JS shell or a block, not zero "
+                f"results. Retry with --render or with a residential proxy."
             )
         return codes, serp_url
 
@@ -861,10 +861,10 @@ def discover(
     limiter: Optional[RateLimiter] = None,
     retries: int = 2,
 ) -> dict[str, str]:
-    """Fase 1: rota consultas x páginas hasta reunir `limit` shortcodes."""
+    """Phase 1: rotates queries x pages until gathering `limit` shortcodes."""
     discovered: dict[str, str] = {}
     queries = build_queries(keyword, max_queries)
-    LOG.info("Fase 1: %d consultas para %r", len(queries), keyword)
+    LOG.info("Phase 1: %d queries for %r", len(queries), keyword)
 
     for i, query in enumerate(queries, start=1):
         if len(discovered) >= limit:
@@ -878,45 +878,45 @@ def discover(
             if limiter is not None:
                 limiter.acquire()
             try:
-                # Un 429 de Google aquí es lo más habitual en volumen: se
-                # reintenta con backoff antes de dar la consulta por perdida.
+                # A 429 from Google here is the most common thing at volume: it
+                # is retried with backoff before declaring the query lost.
                 found, serp_url = with_retries(
                     lambda: serp.search(query, start=start, num=num_per_page),
                     attempts=retries, base_delay=5.0, max_delay=45.0,
                 )
             except CaptchaError as exc:
                 stats.blocked_queries += 1
-                LOG.warning("      BLOQUEADO: %s", exc)
-                break  # seguir insistiendo contra un CAPTCHA sólo agrava el bloqueo
+                LOG.warning("      BLOCKED: %s", exc)
+                break  # pushing on against a CAPTCHA only worsens the block
             except JsShellError as exc:
                 stats.js_shell_queries += 1
                 LOG.warning("      shell JS: %s", exc)
                 break
             except RateLimitedError as exc:
-                # Distinto de "no hay resultados": Google nos está frenando.
+                # Different from "no results": Google is throttling us.
                 stats.rate_limited_queries += 1
-                LOG.warning("      Google limita el ritmo (429) tras %d intentos; "
-                            "corré --rate más alto o esperá", retries)
+                LOG.warning("      Google rate-limited (429) after %d attempts; "
+                            "run --rate higher or wait", retries)
                 break
             except FetchError as exc:
                 stats.rate_limited_queries += 1
-                LOG.warning("      fallo de consulta: %s", exc)
+                LOG.warning("      query failed: %s", exc)
                 break
 
             new = {c: serp_url for c in found if c not in discovered}
             discovered.update(new)
-            LOG.info("      +%d nuevos (total %d)", len(new), len(discovered))
+            LOG.info("      +%d new (total %d)", len(new), len(discovered))
             if not found:
-                break  # esta consulta no tiene más páginas útiles
+                break  # this query has no more useful pages
             time.sleep(random.uniform(*delay))
 
     stats.discovered = len(discovered)
-    LOG.info("Fase 1: %d shortcodes únicos descubiertos", len(discovered))
+    LOG.info("Phase 1: %d unique shortcodes discovered", len(discovered))
     return discovered
 
 
 # --------------------------------------------------------------------------- #
-# Fase 2 - Parseo del embed público de Instagram
+# Phase 2 - Parsing Instagram's public embed
 # --------------------------------------------------------------------------- #
 def parse_embed(html: str, shortcode: str, source_serp_url: str) -> InstagramPost:
     soup = BeautifulSoup(html, "html.parser")
@@ -948,7 +948,7 @@ def parse_embed(html: str, shortcode: str, source_serp_url: str) -> InstagramPos
                 break
 
     enrich = _enrich_from_gql(html, shortcode)
-    # El DOM siempre aporta una imagen; el blob puede subir la resolución.
+    # The DOM always provides an image; the blob can raise the resolution.
     if not enrich.get("image_url"):
         enrich["image_url"] = image_url
 
@@ -961,10 +961,10 @@ def parse_embed(html: str, shortcode: str, source_serp_url: str) -> InstagramPos
 
 
 def _enrich_from_gql(html: str, shortcode: str) -> dict[str, Any]:
-    """Suma la metadata del blob GraphQL y la fecha inferida.
+    """Adds the GraphQL blob metadata and the inferred date.
 
-    Nunca lanza: si el blob no está (embed liviano) devuelve sólo la fecha, que
-    depende únicamente del shortcode y por eso está disponible siempre.
+    Never raises: if the blob is missing (light embed) it returns only the date,
+    which depends solely on the shortcode and is therefore always available.
     """
     out: dict[str, Any] = {
         "post_published_at": shortcode_to_datetime(shortcode),
@@ -976,17 +976,17 @@ def _enrich_from_gql(html: str, shortcode: str) -> dict[str, Any]:
     meta = parse_gql_media(data)
     out.update({k: v for k, v in meta.items() if k != "best_url"})
     out["rich_metadata"] = True
-    # La mejor resolución del CDN suele superar la del <img> del DOM.
+    # The best CDN resolution usually exceeds the one from the DOM's <img>.
     if meta.get("best_url"):
         out["image_url"] = meta["best_url"]
     return out
 
 
 def _extract_media(soup: BeautifulSoup, author: str | None) -> tuple[Optional[str], bool]:
-    """Foto del post: `img.EmbeddedMediaImage`.
+    """Post photo: `img.EmbeddedMediaImage`.
 
-    El avatar del autor también es un `<img>` y NO debe confundirse con el post
-    (README, hallazgo 2).
+    The author avatar is also an `<img>` and must NOT be confused with the post
+    (README, finding 2).
     """
     node = soup.select_one("img.EmbeddedMediaImage")
     if node and node.get("src"):
@@ -1016,21 +1016,21 @@ def _extract_media(soup: BeautifulSoup, author: str | None) -> tuple[Optional[st
 
 
 def is_unavailable(post: InstagramPost, html: str) -> bool:
-    """Soft 404: Instagram devuelve 200 con aviso de enlace roto."""
+    """Soft 404: Instagram returns 200 with a broken-link notice."""
     if any(m in html for m in SOFT_404_MARKERS):
         return True
     return post.image_url is None and post.caption is None
 
 
 # --------------------------------------------------------------------------- #
-# Fase 3 - Descarga y persistencia
+# Phase 3 - Download and persistence
 # --------------------------------------------------------------------------- #
 def detect_image_format(data: bytes) -> tuple[str, str]:
-    """Devuelve (extensión, mime) leyendo los bytes, no la URL.
+    """Returns (extension, mime) by reading the bytes, not the URL.
 
-    El CDN de Instagram sirve WebP aunque la URL termine en `.jpg`: medido 2 de
-    24 posts en una corrida real. Guardar WebP con extensión .jpg rompe
-    cualquier consumidor que confíe en la extensión (PIL, torchvision, ffmpeg).
+    Instagram's CDN serves WebP even when the URL ends in `.jpg`: measured in 2 of
+    24 posts in a real run. Saving WebP with a .jpg extension breaks
+    any consumer that trusts the extension (PIL, torchvision, ffmpeg).
     """
     if data[:3] == b"\xff\xd8\xff":
         return "jpg", "image/jpeg"
@@ -1050,19 +1050,19 @@ def download_image(client: HttpClient, out_dir: Path, post: InstagramPost,
     try:
         data = client.get_bytes(post.image_url)
     except FetchError as exc:
-        LOG.warning("[%s] falló la descarga de imagen: %s", post.shortcode, exc)
+        LOG.warning("[%s] image download failed: %s", post.shortcode, exc)
         return False
     if len(data) < 1024:
-        LOG.warning("[%s] respuesta de imagen sospechosamente chica", post.shortcode)
+        LOG.warning("[%s] suspiciously small image response", post.shortcode)
         return False
 
     ext, _mime = detect_image_format(data)
     if ext == "bin":
-        LOG.warning("[%s] formato de imagen desconocido; no se guarda", post.shortcode)
+        LOG.warning("[%s] unknown image format; not saving", post.shortcode)
         return False
 
-    # La extensión se decide recién ahora, así que el chequeo de "ya existe"
-    # tiene que buscar cualquier archivo previo del shortcode.
+    # The extension is decided only now, so the "already exists" check
+    # has to look for any previous file of the shortcode.
     existing = [p for p in out_dir.glob(f"{post.shortcode}.*") if p.stat().st_size > 0]
     if existing and not overwrite:
         post.local_image_path = str(existing[0])
@@ -1071,7 +1071,7 @@ def download_image(client: HttpClient, out_dir: Path, post: InstagramPost,
     dest = out_dir / f"{post.shortcode}.{ext}"
     dest.write_bytes(data)
     post.local_image_path = str(dest)
-    LOG.info("[%s] imagen guardada (%d bytes, %s)", post.shortcode, len(data), ext)
+    LOG.info("[%s] image saved (%d bytes, %s)", post.shortcode, len(data), ext)
     return True
 
 
@@ -1088,12 +1088,12 @@ def write_metadata(posts: list[InstagramPost], stats: ScrapeStats, query: str,
 
 
 class RateLimiter:
-    """Espacia las peticiones globalmente, aunque haya N workers.
+    """Spaces out requests globally, even with N workers.
 
-    El slot se reserva bajo lock pero la espera ocurre FUERA del lock: si no,
-    los workers se serializarían de a uno y la concurrencia no serviría.
-    Instagram no publica su límite; este es el freno que se puede bajar con
-    `--rate` sin tocar código, y `--rate 0` lo desactiva.
+    The slot is reserved under a lock but the wait happens OUTSIDE the lock: if
+    not, the workers would serialize one by one and concurrency would be useless.
+    Instagram does not publish its limit; this is the brake that can be lowered
+    with `--rate` without touching code, and `--rate 0` disables it.
     """
 
     def __init__(self, min_interval: float) -> None:
@@ -1115,22 +1115,22 @@ class RateLimiter:
 
 def with_retries(fn: Any, attempts: int, *, base_delay: float = 2.0,
                  max_delay: float = 60.0, on_error: Any = None) -> Any:
-    """Ejecuta `fn` reintentando ante fallos transitorios.
+    """Runs `fn` retrying on transient failures.
 
-    Escala de decisión, toda medida:
-      - `NotFoundError`  -> no se reintenta: el post no existe.
-      - `RateLimitedError` -> se espera `Retry-After` si el servidor lo manda.
-      - otro `FetchError` -> backoff exponencial.
+    Decision scale, all measured:
+      - `NotFoundError`  -> no retry: the post does not exist.
+      - `RateLimitedError` -> wait `Retry-After` if the server sends it.
+      - other `FetchError` -> exponential backoff.
 
-    Es lo que evita que una corrida larga pierda cientos de posts en silencio:
-    un 429 puntual se recuperarse en vez de contarse como fallo.
+    This is what prevents a long run from silently losing hundreds of posts:
+    a sporadic 429 recovers instead of being counted as a failure.
     """
     last: Optional[BaseException] = None
     for attempt in range(1, max(1, attempts) + 1):
         try:
             return fn()
         except NotFoundError:
-            raise  # terminal por definición
+            raise  # terminal by definition
         except (RateLimitedError, FetchError) as exc:
             last = exc
             if on_error is not None:
@@ -1139,12 +1139,12 @@ def with_retries(fn: Any, attempts: int, *, base_delay: float = 2.0,
                 break
             if isinstance(exc, RateLimitedError) and exc.retry_after:
                 wait = min(max(exc.retry_after, base_delay), max_delay)
-                LOG.warning("      429; esperando %.0fs (Retry-After)", wait)
+                LOG.warning("      429; waiting %.0fs (Retry-After)", wait)
             else:
                 wait = min(base_delay * (2 ** (attempt - 1)), max_delay)
-                # jitter: evita que N workers reintenten en lockstep
+                # jitter: prevents N workers from retrying in lockstep
                 wait *= random.uniform(0.8, 1.2)
-                LOG.warning("      %s; reintento %d/%d en %.1fs",
+                LOG.warning("      %s; retry %d/%d in %.1fs",
                             type(exc).__name__, attempt + 1, attempts, wait)
             time.sleep(wait)
     assert last is not None
@@ -1153,10 +1153,10 @@ def with_retries(fn: Any, attempts: int, *, base_delay: float = 2.0,
 
 def write_metadata_from_store(store: "PostStore", stats: ScrapeStats, query: str,
                               args: argparse.Namespace, out_dir: Path) -> Path:
-    """Escribe metadata.json a partir de TODOS los posts terminados en la base.
+    """Writes metadata.json from ALL the finished posts in the database.
 
-    No de los de esta corrida: así el archivo es la foto completa del
-    conocimiento acumulado, aunque la corrida se haya cortado a la mitad.
+    Not just this run: that way the file is the complete picture of the
+    accumulated knowledge, even if the run was cut in half.
     """
     path = out_dir / "metadata.json"
     rows = store.done_posts()
@@ -1201,46 +1201,45 @@ def _parse_dt(value: Optional[str]) -> datetime:
 
 
 # --------------------------------------------------------------------------- #
-# Metadata enriquecida: el blob GraphQL que el embed trae y nadie parsea
+# Rich metadata: the GraphQL blob the embed carries and nobody parses
 # --------------------------------------------------------------------------- #
-# El embed renderizado incluye un `contextJSON` con `gql_data.shortcode_media`,
-# que es una respuesta GraphQL real: likes, comentarios, seguidores, verificado,
-# dimensiones, alt-text y las diapositivas del carrusel. Todo eso se estaba
-# descartando porque el parseomiraba sólo el DOM.
+# The rendered embed includes a `contextJSON` with `gql_data.shortcode_media`,
+# which is a real GraphQL response: likes, comments, followers, verified,
+# dimensions, alt-text and the carousel slides. All of that was being
+# discarded because the parser only looked at the DOM.
 #
-# Cobertura medida: 10/12 posts. Cuando falta, Instagram sirve
-# `contextJSON: null` con `isRichEmbed: false`. NO es transitorio (probado con
-# 4 reintentos) y ninguna variante de URL lo recupera, así que se guarda como
-# null y no se reintenta.
+# Measured coverage: 10/12 posts. When it is missing, Instagram serves
+# `contextJSON: null` with `isRichEmbed: false`. It is NOT transient (tested with
+# 4 retries) and no URL variant recovers it, so it is saved as null and not retried.
 RE_CONTEXT_JSON: Final[re.Pattern[str]] = re.compile(
     r'"contextJSON"\s*:\s*'
 )
 SHORTCODE_ALPHABET: Final[str] = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
-# Epoch del esquema de IDs de Instagram (el high-bits del media ID es un
-# timestamp). Validado: el id derivado del shortcode coincide exacto con el `id`
-# del embed, y las fechas decodificadas coinciden con captions que declaran su
-# propio mes/año ("dropping in August 2026" -> 2026-08-01).
+# Epoch of Instagram's ID scheme (the high bits of the media ID are a
+# timestamp). Validated: the id derived from the shortcode matches exactly the
+# `id` of the embed, and the decoded dates match captions that declare their
+# own month/year ("dropping in August 2026" -> 2026-08-01).
 IG_ID_EPOCH_MS: Final[int] = 1314220021721
 
 
 def shortcode_to_media_id(shortcode: str) -> int:
-    """Convierte el shortcode base64url de Instagram en su media ID numérico."""
+    """Converts an Instagram base64url shortcode into its numeric media ID."""
     n = 0
     for ch in shortcode:
         idx = SHORTCODE_ALPHABET.find(ch)
         if idx < 0:
-            raise ValueError(f"shortcode inválido: {shortcode!r}")
+            raise ValueError(f"invalid shortcode: {shortcode!r}")
         n = n * 64 + idx
     return n
 
 
 def shortcode_to_datetime(shortcode: str) -> Optional[datetime]:
-    """Fecha de publicación INFERIDA, decodificada del media ID.
+    """INFERRED publication date, decoded from the media ID.
 
-    No es un campo oficial de Instagram: es la marca de creación que su esquema
-    de IDs ya tiene codificada. Es exacta, pero se marca como inferida.
+    It is not an official Instagram field: it is the creation timestamp that its
+    ID scheme already encodes. It is exact, but it is flagged as inferred.
     """
     try:
         media_id = shortcode_to_media_id(shortcode)
@@ -1254,11 +1253,11 @@ def shortcode_to_datetime(shortcode: str) -> Optional[datetime]:
 
 
 def extract_context_json(html: str) -> Optional[dict[str, Any]]:
-    """Extrae el `contextJSON` del embed tolerando los escapes de Instagram.
+    """Extracts the `contextJSON` from the embed tolerating its escapes.
 
-    No se puede hacer con un regex ingenuo: el valor es un JSON anidado y
-    escapado dentro del HTML, y un patrón simple falla en casos reales
-    (medido: 1 de 2). Se escanea el string respetando los escapes.
+    It cannot be done with a naive regex: the value is nested JSON,
+    escaped inside the HTML, and a simple pattern fails on real cases
+    (measured: 1 of 2). The string is scanned respecting the escapes.
     """
     key = '"contextJSON":"'
     search_from = 0
@@ -1299,7 +1298,7 @@ def _first_int(node: Any, *path: str) -> Optional[int]:
 
 
 def parse_gql_media(data: dict[str, Any]) -> dict[str, Any]:
-    """Normaliza `gql_data.shortcode_media` a campos planos y utilizables."""
+    """Normalizes `gql_data.shortcode_media` into flat, usable fields."""
     sm = data.get("gql_data", {}).get("shortcode_media")
     if not isinstance(sm, dict):
         return {}
@@ -1344,7 +1343,7 @@ class PostProcessor:
     """Procesa un shortcode: embed -> parseo -> imagen -> checkpoint.
 
     Un objeto por corrida. Es seguro usarlo desde varios hilos porque:
-      - cada worker tiene su propia sesión HTTP (session no es thread-safe),
+      - each worker has its own HTTP session (sessions are not thread-safe),
       - el store serializa sus escrituras con un lock,
       - el rate limiter es global.
     """
@@ -1426,7 +1425,7 @@ class PostProcessor:
             )
         except FetchError as exc:
             store.log_error(code, a.retries, f"image:{type(exc).__name__}", str(exc))
-            LOG.warning("[%s] falló la imagen: %s", code, exc)
+            LOG.warning("[%s] image download failed: %s", code, exc)
 
         store.mark_ok(
             code, query=keyword, author=post.author, caption=post.caption,
@@ -1442,11 +1441,11 @@ class PostProcessor:
 
 
 def resolve_keywords(args: argparse.Namespace) -> list[str]:
-    """Arma la cola de keywords desde --query (repetible) y --queries-file.
+    """Builds the keyword queue from --query (repeatable) and --queries-file.
 
-    El techo de posts viene del breadth, no de la profundidad: una keyword da
-    ~60-120 shortcodes y rotar dorks sobre la misma rinde poco (78% de
-    solapamiento medido). Por eso la cola es el mecanismo para llegar a miles.
+    The post ceiling comes from breadth, not depth: one keyword gives ~60-120
+    shortcodes and rotating dorks over it yields little (78% overlap measured).
+    That is why the queue is the mechanism to reach thousands.
     """
     kws: list[str] = list(args.query or [])
     if args.queries_file:
@@ -1479,10 +1478,10 @@ def run(args: argparse.Namespace) -> int:
     cookies: Optional[dict[str, str]] = None
 
     # ---- Bootstrap: resolver el CAPTCHA con un Chrome real ---------------
-    # Google no entrega la SERP a clientes HTTP sin una sesión previa. Se abre
-    # un Chrome de verdad, el usuario resuelve la verificación una vez, y se
-    # exportan sus cookies. A partir de ahí el scraping corre por HTTP, que es
-    # mucho más rápido y no vuelve a pedir la verificación.
+    # Google does not deliver the SERP to plain HTTP clients without a prior
+    # session. A real Chrome is opened, the user solves the verification once,
+    # and its cookies are exported. From there scraping runs over HTTP, which is
+    # much faster and does not ask for verification again.
     if args.interactive and not args.shortcodes:
         browser = CdpBrowser(profile_dir=args.profile, port=args.cdp_port,
                              proxy_url=args.proxy_url, wait_captcha=args.wait_captcha)
@@ -1514,7 +1513,7 @@ def run(args: argparse.Namespace) -> int:
             serp = GoogleSerpClient(client, tld=args.tld, render=args.render,
                                     proxy_url=args.proxy_url)
             discovered: dict[str, str] = {}
-            # Freno propio para Google: es el host que más limita, y el ritmo
+            # Its own brake for Google: it is the host that throttles most, and
             # de la fase 2/3 (Instagram) no lo protege.
             discovery_limiter = RateLimiter(
                 args.discovery_rate if args.discovery_rate > 0 else args.rate)
@@ -1522,7 +1521,7 @@ def run(args: argparse.Namespace) -> int:
                      len(keywords), discovery_limiter._min)
             for n_kw, kw in enumerate(keywords, start=1):
                 if args.limit > 0 and len(discovered) >= args.limit:
-                    LOG.info("  discovery completo: límite alcanzado")
+                    LOG.info("  discovery complete: limit reached")
                     break
                 restante = (args.limit - len(discovered)) if args.limit > 0 else 0
                 LOG.info("  [%d/%d] keyword: %r", n_kw, len(keywords), kw)
@@ -1532,7 +1531,7 @@ def run(args: argparse.Namespace) -> int:
                                  limiter=discovery_limiter,
                                  retries=max(1, args.discovery_retries))
                 except FetchError as exc:
-                    LOG.warning("  discovery de %r falló: %s", kw, exc)
+                    LOG.warning("  discovery for %r failed: %s", kw, exc)
                     continue
                 nuevos = {c: u for c, u in d.items() if c not in discovered}
                 discovered.update(nuevos)
@@ -1549,20 +1548,20 @@ def run(args: argparse.Namespace) -> int:
                         "Ninguna consulta a Google pudo completarse "
                         f"({stats.blocked_queries} bloqueadas por CAPTCHA, "
                         f"{stats.js_shell_queries} con shell JS). "
-                        "Hace falta un proxy residencial o móvil (--proxy-url)."
+                        "A residential or mobile proxy is required (--proxy-url)."
                     )
                 if bloqueado:
                     LOG.warning(
                         "Discovery bloqueado por Google, pero la base tiene %d posts "
-                        "pendientes: continúo con --resume sobre lo ya descubierto.",
+                        "pending: continuing with --resume over what was already discovered.",
                         en_base)
                 elif stats.rate_limited_queries:
                     LOG.warning(
-                        "Google limitó el ritmo en %d consultas (429): no es que no "
-                        "haya resultados. Subí --rate o esperá antes de reintentar.",
+                        "Google rate limited %d queries (429): that is not the same as "
+                        "no results. Raise --rate or wait before retrying.",
                         stats.rate_limited_queries)
                 else:
-                    LOG.warning("Google no devolvió resultados para ninguna keyword.")
+                    LOG.warning("Google returned no results for any keyword.")
 
         # ---- Fase 2 + 3 ---------------------------------------------------
         # El discovery se persiste primero: si la corrida se corta, locostoso
@@ -1572,20 +1571,20 @@ def run(args: argparse.Namespace) -> int:
                  nuevos, len(discovered))
 
         pendientes = store.pending(include_failed=args.retry_failed)
-        # En --resume lo que ya está en la base se omite; sin --resume se
+        # With --resume what is already in the database is skipped; without it
         # procesa lo pendiente de todas las corridas.
         if args.resume:
             ya_hechos = {r["shortcode"] for r in store.done_posts()}
             pendientes = [r for r in pendientes if r["shortcode"] not in ya_hechos]
 
         total = len(pendientes)
-        LOG.info("Fase 2/3: %d posts a procesar (límite %d)%s", total, args.limit,
+        LOG.info("Phase 2/3: %d posts to process (limit %d)%s", total, args.limit,
                  " [resume]" if args.resume else "")
 
-        # El límite se aplica acá, no dentro del bucle: con workers es más
+        # The limit is applied here, not inside the loop: with workers it is
         # simple y barato recortar la lista que llevar un contador compartido.
         if args.limit > 0 and len(pendientes) > args.limit:
-            LOG.info("  límite %d: %d quedan para --resume",
+            LOG.info("  limit %d: %d remain for --resume",
                      args.limit, len(pendientes) - args.limit)
             pendientes = pendientes[:args.limit]
             total = len(pendientes)
@@ -1605,8 +1604,8 @@ def run(args: argparse.Namespace) -> int:
                         for r in pendientes
                     }
                     for n, fut in enumerate(as_completed(futs), start=1):
-                        # Nada se traga en silencio: una excepción aquí sería
-                        # pérdida de datos invisible (ya pasó una vez).
+                        # Nothing is swallowed silently: an exception here would be
+                        # invisible data loss (it happened once already).
                         try:
                             p = fut.result()
                         except Exception as exc:  # noqa: BLE001
@@ -1638,7 +1637,7 @@ def run(args: argparse.Namespace) -> int:
         store.close()
         client.close()
 
-    LOG.info("Listo: %d posts en esta corrida, %d imágenes -> %s",
+    LOG.info("Done: %d posts in this run, %d images -> %s",
              len(posts), stats.images_saved, path)
     LOG.info("Acumulado en base: %s", store_counts_cache)
     if stats.failed:
@@ -1659,13 +1658,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--query", action="append", default=None,
                    help='Keyword, ej. "running shoes". Repetible para una cola.')
     p.add_argument("--queries-file", default=None,
-                   help="Archivo con una keyword por línea (usa # para comentarios)")
+                   help="File with one keyword per line (uses # for comments)")
     p.add_argument("--limit", type=int, default=10,
-                   help="Máximo de posts a devolver (default 10)")
+                   help="Maximum posts to return (default 10)")
     p.add_argument("--workers", type=int, default=1,
                    help="Workers concurrentes en la fase 2/3 (default 1)")
     p.add_argument("--rate", type=float, default=0.0,
-                   help="Segundos mínimos entre requests a Instagram. 0 = sin freno")
+                   help="Minimum seconds between requests to Instagram. 0 = no brake")
     p.add_argument("--discovery-rate", type=float, default=0.0,
                    help="Segundos entre consultas a Google. Si es 0 usa --rate")
     p.add_argument("--discovery-retries", type=int, default=2,
@@ -1678,18 +1677,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--render", action="store_true",
                    help="Renderizar con Chromium headless en vez de HTTP plano")
     p.add_argument("--interactive", action="store_true",
-                   help="Chrome real con ventana: resolvés el CAPTCHA a mano y sigue")
+                   help="Real Chrome with a window: you solve the CAPTCHA by hand and it continues")
     p.add_argument("--profile", default=None,
                    help="Perfil persistente de Chrome (default ~/.ig_google_profile)")
     p.add_argument("--cdp-port", type=int, default=9222)
     p.add_argument("--wait-captcha", type=int, default=180,
                    help="Segundos de espera para resolver el CAPTCHA (default 180)")
     p.add_argument("--max-queries", type=int, default=6,
-                   help="Máximo de dorks a rotar (default 6)")
+                   help="Maximum dorks to rotate (default 6)")
     p.add_argument("--max-pages", type=int, default=2,
-                   help="Páginas por dork vía start= (default 2)")
+                   help="Pages per dork via start= (default 2)")
     p.add_argument("--num-per-page", type=int, default=100,
-                   help="Resultados por página (default 100)")
+                   help="Results per page (default 100)")
     p.add_argument("--delay-min", type=float, default=3.0)
     p.add_argument("--delay-max", type=float, default=7.0)
     p.add_argument("--timeout", type=float, default=25.0)
@@ -1706,7 +1705,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resume", action="store_true",
                    help="Omitir los posts ya terminados y seguir con los pendientes")
     p.add_argument("--overwrite", action="store_true",
-                   help="Re-descargar imágenes ya presentes")
+                   help="Re-download images already present")
     p.add_argument("--shortcodes", default=None,
                    help="Lista de shortcodes separados por coma; saltea Google")
     p.add_argument("-v", "--verbose", action="store_true")

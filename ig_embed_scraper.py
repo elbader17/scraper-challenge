@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 """
-Prueba de Concepto: extracción de publicaciones públicas de Instagram por hashtag
-usando únicamente la ruta pública de *embeds* (sin login, sin cookies de usuario).
+Proof of Concept: extraction of public Instagram posts by hashtag
+using only the public *embed* route (no login, no user cookies).
 
-Técnicas verificadas empíricamente contra el sitio real:
+Techniques empirically verified against the real site:
 
-  Fase 1 - Descubrimiento
+  Phase 1 - Discovery
       https://www.instagram.com/explore/tags/{hashtag}/
-      El HTML renderizado en servidor contiene dos fuentes de shortcodes:
-        a) anclas  <a href="/reel/<shortcode>/?utm_source=popular_topic_grid">
+      The server-rendered HTML contains two sources of shortcodes:
+        a) anchors  <a href="/reel/<shortcode>/?utm_source=popular_topic_grid">
         b) blobs   "code":"<shortcode>"
-      Sin paginación efectiva: ?page=2 devuelve el mismo grid (~12-14 posts).
+      No effective pagination: ?page=2 returns the same grid (~12-14 posts).
 
-  Fase 2 - Embed
+  Phase 2 - Embed
       https://www.instagram.com/p/{shortcode}/embed/captioned/
-      Devuelve 200 sin sesión. Observaciones importantes sobre el DOM actual:
-        - NO hay <meta property="og:*">, NO hay JSON-LD, NO hay <time datetime>.
-          El parseo debe ser 100% basado en clases CSS del DOM.
-        - La foto principal es `img.EmbeddedMediaImage`
+      Returns 200 without a session. Important observations about the current DOM:
+        - There is NO <meta property="og:*">, NO JSON-LD, NO <time datetime>.
+          Parsing must be 100% based on CSS classes of the DOM.
+        - The main photo is `img.EmbeddedMediaImage`
           (alt="Instagram post shared by @usuario").
-        - El avatar del autor también es un <img>, sin clase, con
-          alt="{username}" y su CDN contiene el segmento "t51.2885-19".
-          -> confundirse con él produce imágenes de 40x40 en lugar del post.
-        - El autor se obtiene del <a href="https://www.instagram.com/<user>/?utm_source=ig_embed">
-          que cuelga del bloque `.Caption`.
-        - En reels, el "frame" es una imagen estática servida por el CDN.
+        - The author's avatar is also an <img>, with no class, with
+          alt="{username}" and its CDN contains the segment "t51.2885-19".
+          -> mistaking it for the main photo yields 40x40 images instead of the post.
+        - The author is obtained from the <a href="https://www.instagram.com/<user>/?utm_source=ig_embed">
+          that hangs from the `.Caption` block.
+        - In reels, the "frame" is a static image served by the CDN.
 
-Uso:
+Usage:
     python ig_embed_scraper.py --hashtag sneakers --limit 5
     python ig_embed_scraper.py --hashtag sneakers --limit 20 --proxy socks5://127.0.0.1:9050
 """
@@ -46,18 +46,18 @@ from pathlib import Path
 from typing import Any, Final, Iterable, Optional, Protocol
 
 # --------------------------------------------------------------------------- #
-# Dependencias
+# Dependencies
 # --------------------------------------------------------------------------- #
 try:
     from bs4 import BeautifulSoup  # type: ignore
 except ImportError:  # pragma: no cover
-    sys.exit("Falta beautifulsoup4 ->  pip install -r requirements.txt")
+    sys.exit("Missing beautifulsoup4 ->  pip install -r requirements.txt")
 
 
 LOG: logging.Logger = logging.getLogger("ig_scraper")
 
 # --------------------------------------------------------------------------- #
-# Constantes
+# Constants
 # --------------------------------------------------------------------------- #
 
 USER_AGENT_FALLBACK: Final[str] = (
@@ -68,45 +68,45 @@ USER_AGENT_FALLBACK: Final[str] = (
 TAG_PAGE: Final[str] = "https://www.instagram.com/explore/tags/{tag}/"
 EMBED_PAGE: Final[str] = "https://www.instagram.com/p/{shortcode}/embed/captioned/"
 
-# Orden: primero anclas reales, luego blobs JSON de respaldo.
+# Order: real anchors first, then fallback JSON blobs.
 RE_ANCHOR: Final[re.Pattern[str]] = re.compile(
     r'href="/(?:p|reel|tv)/([A-Za-z0-9_\-]{5,})/'
 )
 RE_JSON_CODE: Final[re.Pattern[str]] = re.compile(r'"code":"([A-Za-z0-9_\-]{5,})"')
 
-# Autor: enlace colgado del bloque Caption.
+# Author: link hanging from the Caption block.
 RE_AUTHOR_LINK: Final[re.Pattern[str]] = re.compile(
     r"^https?://(?:www\.)?instagram\.com/([A-Za-z0-9._]+)/(?:\?|$)"
 )
-# Respaldo: alt="Instagram post shared by @usuario"
+# Fallback: alt="Instagram post shared by @usuario"
 RE_AUTHOR_ALT: Final[re.Pattern[str]] = re.compile(
     r"Instagram post shared by @([A-Za-z0-9._]+)"
 )
-# Avatar: nunca es la foto del post.
+# Avatar: never the post's photo.
 RE_AVATAR_CDN: Final[re.Pattern[str]] = re.compile(r"/t51\.2885-19/")
-# Tokens de configuración que el regex JSON puede confundir con un shortcode.
-# Ejemplo real: {"IntlCurrentLocale",[],"code":"en_US"} -> "en_US".
+# Config tokens that the JSON regex can mistake for a shortcode.
+# Real example: {"IntlCurrentLocale",[],"code":"en_US"} -> "en_US".
 RE_LOCALE: Final[re.Pattern[str]] = re.compile(r"^[a-z]{2,3}[_-][A-Z]{2}$")
-# Los shortcodes de Instagram tienen 10-11 caracteres (12 con margen).
+# Instagram shortcodes are 10-11 characters (12 as margin).
 SHORTCODE_LEN: Final[tuple[int, int]] = (10, 12)
-# Instagram responde 200 (no 404) a shortcodes eliminados, privados o inválidos,
-# mostrando en su lugar esta página de aviso.
+# Instagram replies 200 (not 404) to deleted, private or invalid shortcodes,
+# showing this notice page instead.
 SOFT_404_MARKERS: Final[tuple[str, ...]] = (
     "may be broken, or the post may have been removed",
     "This page isn't available",
     "Sorry, this page isn't available",
 )
-# Ruido que Instagram concatena al final del texto del bloque Caption.
+# Noise that Instagram appends at the end of the Caption block text.
 RE_COMMENTS_TAIL: Final[re.Pattern[str]] = re.compile(
     r"\s*View all ([\d.,]+[KkMm]? )?comments?\.?\s*$", re.IGNORECASE
 )
 
-# Alphabet oficial usado por los shortcodes de Instagram (URL-safe base64).
+# Official alphabet used by Instagram shortcodes (URL-safe base64).
 SHORTCODE_ALPHABET: Final[str] = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
-# Epoch del "snowflake" de media IDs, derivado del primer post histórico
-# de Instagram (id 12705937228168714 @ 2010-10-06T17:05:40Z).
+# Epoch of the media ID "snowflake", derived from Instagram's first historical
+# post (id 12705937228168714 @ 2010-10-06T17:05:40Z).
 MEDIA_ID_EPOCH_MS: Final[int] = 1284870074250
 
 SLEEP_MIN: Final[float] = 1.5
@@ -114,22 +114,22 @@ SLEEP_MAX: Final[float] = 3.5
 
 
 # --------------------------------------------------------------------------- #
-# Modelo de datos
+# Data model
 # --------------------------------------------------------------------------- #
 @dataclass(slots=True)
 class Post:
-    """Una publicación extraída del embed público."""
+    """A post extracted from the public embed."""
 
     shortcode: str
     author: Optional[str]
     caption: Optional[str]
     image_url: Optional[str]
     local_image_path: Optional[str] = None
-    # ISO-8601 UTC del momento de la extracción. Siempre presente.
+    # ISO-8601 UTC of the extraction moment. Always present.
     scraped_at: str = ""
-    # El embed público ya no expone la fecha de publicación (sin <time>,
-    # sin JSON-LD, sin og:). Sólo se llena con --decode-post-time, y en ese
-    # caso se marca como inferido, no verificado contra el servidor.
+    # The public embed no longer exposes the publication date (no <time>,
+    # no JSON-LD, no og:). It is only filled with --decode-post-time, and in
+    # that case it is marked as inferred, not verified against the server.
     post_published_at: Optional[str] = None
     post_published_at_inferred: bool = False
     is_video: bool = False
@@ -140,7 +140,7 @@ class Post:
 
 @dataclass(slots=True)
 class ScrapeStats:
-    """Contadores del pipeline, útiles para inspección y logs."""
+    """Pipeline counters, useful for inspection and logs."""
 
     discovered: int = 0
     processed: int = 0
@@ -167,18 +167,18 @@ class ScraperConfig:
 
 
 # --------------------------------------------------------------------------- #
-# Transporte HTTP
+# HTTP transport
 # --------------------------------------------------------------------------- #
 class FetchError(RuntimeError):
-    """Fallo recuperable al descargar una URL."""
+    """Recoverable failure while downloading a URL."""
 
 
 class NotFoundError(FetchError):
-    """HTTP 404 - post eliminado, privado, o hashtag inexistente."""
+    """HTTP 404 - deleted post, private, or nonexistent hashtag."""
 
 
 class RateLimitedError(FetchError):
-    """HTTP 429 - límite de peticiones alcanzado."""
+    """HTTP 429 - request limit reached."""
 
     def __init__(self, message: str, retry_after: float | None = None) -> None:
         super().__init__(message)
@@ -186,28 +186,28 @@ class RateLimitedError(FetchError):
 
 
 class Client(Protocol):
-    """Interfaz mínima de transporte; permite swapear curl_cffi / httpx."""
+    """Minimal transport interface; allows swapping curl_cffi / httpx."""
 
     def get(self, url: str) -> tuple[int, bytes, dict[str, str]]: ...
     def close(self) -> None: ...
 
 
 def _normalize_proxy(proxy: Optional[str]) -> Optional[dict[str, str]]:
-    """curl_cffi espera un dict de schemes; httpx acepta una sola URL."""
+    """curl_cffi expects a dict of schemes; httpx accepts a single URL."""
     if not proxy:
         return None
     return {"http": proxy, "https": proxy}
 
 
 class CurlCffiClient:
-    """Cliente por defecto: imita el handshake TLS/fingerprint de Chrome.
+    """Default client: mimics Chrome's TLS/fingerprint handshake.
 
-    Es el que evita la mayoría de los bloqueos 401/403 de Instagram, ya que el
-    bot de Instagram valida la huella JA3 del cliente además de las cabeceras.
+    This is the one that avoids most of Instagram's 401/403 blocks, since
+    Instagram's bot validates the client's JA3 fingerprint besides the headers.
     """
 
     def __init__(self, cfg: ScraperConfig) -> None:
-        from curl_cffi import requests as cc_requests  # import perezoso
+        from curl_cffi import requests as cc_requests  # lazy import
 
         self._r = cc_requests
         self._cfg = cfg
@@ -224,8 +224,8 @@ class CurlCffiClient:
                     "image/avif,image/webp,*/*;q=0.8"
                 ),
                 "Accept-Language": "en-US,en;q=0.9",
-                # Identificarse como embed es coherente con la ruta que pedimos
-                # y reduce la probabilidad de que nos devuelvan un login wall.
+                # Identifying as an embed is consistent with the route we ask
+                # for and reduces the chance of being served a login wall.
                 "Referer": "https://www.instagram.com/",
                 "Upgrade-Insecure-Requests": "1",
             }
@@ -235,12 +235,12 @@ class CurlCffiClient:
         r = self._s.get(url, allow_redirects=True)
         headers = {k.lower(): v for k, v in r.headers.items()}
         if r.status_code == 404:
-            raise NotFoundError(f"404 en {url}")
+            raise NotFoundError(f"404 at {url}")
         if r.status_code == 429:
             ra = r.headers.get("Retry-After")
-            raise RateLimitedError(f"429 en {url}", float(ra) if ra else None)
+            raise RateLimitedError(f"429 at {url}", float(ra) if ra else None)
         if r.status_code >= 400:
-            raise FetchError(f"HTTP {r.status_code} en {url}")
+            raise FetchError(f"HTTP {r.status_code} at {url}")
         return r.status_code, r.content, headers
 
     def close(self) -> None:
@@ -248,14 +248,14 @@ class CurlCffiClient:
 
 
 class HttpxClient:
-    """Respaldo si curl_cffi no está disponible o falla al compilar/instalarse.
+    """Fallback if curl_cffi is not available or fails to compile/install.
 
-    Menos resistente al fingerprinting, pero suficiente para la ruta de embed
-    cuando no se bloquea la IP.
+    Less resistant to fingerprinting, but good enough for the embed route
+    when the IP is not blocked.
     """
 
     def __init__(self, cfg: ScraperConfig) -> None:
-        import httpx  # import perezoso
+        import httpx  # lazy import
 
         self._h = httpx
         self._cfg = cfg
@@ -276,12 +276,12 @@ class HttpxClient:
         r = self._s.get(url)
         headers = {k.lower(): v for k, v in r.headers.items()}
         if r.status_code == 404:
-            raise NotFoundError(f"404 en {url}")
+            raise NotFoundError(f"404 at {url}")
         if r.status_code == 429:
             ra = r.headers.get("retry-after")
-            raise RateLimitedError(f"429 en {url}", float(ra) if ra else None)
+            raise RateLimitedError(f"429 at {url}", float(ra) if ra else None)
         if r.status_code >= 400:
-            raise FetchError(f"HTTP {r.status_code} en {url}")
+            raise FetchError(f"HTTP {r.status_code} at {url}")
         return r.status_code, r.content, headers
 
     def close(self) -> None:
@@ -290,24 +290,24 @@ class HttpxClient:
 
 def build_client(cfg: ScraperConfig) -> Client:
     if cfg.proxy_url:
-        LOG.info("Proxy activo: %s", _redact_proxy(cfg.proxy_url))
+        LOG.info("Proxy active: %s", _redact_proxy(cfg.proxy_url))
     try:
         return CurlCffiClient(cfg)
-    except Exception as exc:  # noqa: BLE001 - queremos degradar, no abortar
-        LOG.warning("curl_cffi no disponible (%s); uso httpx como respaldo", exc)
+    except Exception as exc:  # noqa: BLE001 - we want to degrade, not abort
+        LOG.warning("curl_cffi not available (%s); using httpx as fallback", exc)
         return HttpxClient(cfg)
 
 
 def _redact_proxy(url: str) -> str:
-    """Oculta credenciales embebidas en la URL del proxy antes de loguear."""
+    """Hides credentials embedded in the proxy URL before logging."""
     return re.sub(r"//[^@/]*@", "//***:***@", url)
 
 
 # --------------------------------------------------------------------------- #
-# Utilidades de red
+# Network utilities
 # --------------------------------------------------------------------------- #
 def human_delay(extra: float = 0.0) -> None:
-    """Pausa aleatoria para emular tráfico humano (1.5 - 3.5 s)."""
+    """Random pause to emulate human traffic (1.5 - 3.5 s)."""
     delay = random.uniform(SLEEP_MIN, SLEEP_MAX) + extra
     LOG.debug("sleep %.2fs", delay)
     time.sleep(delay)
@@ -320,10 +320,10 @@ def fetch_with_retry(
     retries: int,
     label: str = "",
 ) -> bytes:
-    """Descarga una URL con reintentos exponenciales ante 429/5xx.
+    """Download a URL with exponential retries on 429/5xx.
 
-    404 no se reintenta: significa que el recurso no existe, no que esté
-    temporalmente caído.
+    404 is not retried: it means the resource does not exist, not that it is
+    temporarily down.
     """
     backoff = 5.0
     last: Exception | None = None
@@ -338,7 +338,7 @@ def fetch_with_retry(
             last = exc
             wait = exc.retry_after if exc.retry_after else backoff
             LOG.warning(
-                "429 rate limit en %s%s -> espero %.0fs (intento %d/%d)",
+                "429 rate limit at %s%s -> waiting %.0fs (attempt %d/%d)",
                 label, url, wait, attempt, retries,
             )
             time.sleep(min(wait, 120.0))
@@ -346,25 +346,25 @@ def fetch_with_retry(
         except (FetchError, Exception) as exc:  # noqa: BLE001
             last = exc
             LOG.warning(
-                "Fallo en %s%s (%s: %s) -> reintento %d/%d",
+                "Failure at %s%s (%s: %s) -> retry %d/%d",
                 label, url, type(exc).__name__, exc, attempt, retries,
             )
             if attempt < retries:
                 time.sleep(backoff)
                 backoff *= 2
 
-    raise FetchError(f"No se pudo descargar {url}: {last}") from last
+    raise FetchError(f"Could not download {url}: {last}") from last
 
 
 # --------------------------------------------------------------------------- #
-# Fase 1 - Descubrimiento de shortcodes
+# Phase 1 - Shortcode discovery
 # --------------------------------------------------------------------------- #
 def is_plausible_shortcode(token: str) -> bool:
-    """Filtra falsos positivos del regex de descubrimiento.
+    """Filters false positives out of the discovery regex.
 
-    Necesario porque el HTML incluye blobs de configuración del cliente (p.ej.
-    {"IntlCurrentLocale",[],"code":"en_US"}) cuyos valores satisfacen un regex
-    genérico de identificadores pero no son publicaciones.
+    Needed because the HTML includes client config blobs (e.g.
+    {"IntlCurrentLocale",[],"code":"en_US"}) whose values satisfy a generic
+    identifier regex but are not posts.
     """
     if not SHORTCODE_LEN[0] <= len(token) <= SHORTCODE_LEN[1]:
         return False
@@ -374,27 +374,27 @@ def is_plausible_shortcode(token: str) -> bool:
 
 
 def _page_title(html: str) -> str:
-    """Extrae el <title> de la página; sirve para diagnosticar respuestas vacías."""
+    """Extracts the page <title>; useful to diagnose empty responses."""
     m = re.search(r"<title>(.*?)</title>", html, re.S)
-    return m.group(1).strip()[:60] if m else "(sin title)"
+    return m.group(1).strip()[:60] if m else "(no title)"
 
 
 def discover_shortcodes(client: Client, cfg: ScraperConfig) -> list[str]:
-    """Extrae shortcodes públicos de la página del hashtag.
+    """Extracts public shortcodes from the hashtag page.
 
-    Prioridad: anclas reales del DOM (fuente completa y fiable; se verificó que
-    todo shortcode real aparece también como "code" en los blobs JSON). Los
-    blobs JSON se usan sólo como complemento porque contienen claves de
-    configuración ajenas a las publicaciones.
+    Priority: real DOM anchors (complete and reliable source; it was verified
+    that every real shortcode also shows up as "code" in the JSON blobs). The
+    JSON blobs are used only as a complement because they hold config keys
+    unrelated to posts.
 
-    Reintenta ante resultados vacíos: Instagram sirve de forma intermitente una
-    "página shell" genérica (title="Instagram", ~490 KB, cero anclas) incluso
-    para hashtags válidos y muy populares. Se comprobó con #moda, que devolvió
-    12 posts en una corrida y 0 en la siguiente. Un único intento convertiría
-    ese falso negativo en un error definitivo.
+    Retries on empty results: Instagram intermittently serves a generic
+    "shell page" (title="Instagram", ~490 KB, zero anchors) even for valid and
+    very popular hashtags. It was checked with #moda, which returned 12 posts
+    on one run and 0 on the next. A single attempt would turn that false
+    negative into a definitive error.
     """
     url = TAG_PAGE.format(tag=cfg.hashtag)
-    LOG.info("Fase 1: descubriendo posts en %s", url)
+    LOG.info("Phase 1: discovering posts at %s", url)
 
     attempts = max(3, cfg.retries)
     ordered: list[str] = []
@@ -409,16 +409,16 @@ def discover_shortcodes(client: Client, cfg: ScraperConfig) -> list[str]:
 
         from_anchors = [c for c in RE_ANCHOR.findall(html) if is_plausible_shortcode(c)]
         from_json = [c for c in RE_JSON_CODE.findall(html) if is_plausible_shortcode(c)]
-        # dict.from_keys = dedup estable (conserva el orden de aparición).
+        # dict.from_keys = stable dedup (preserves order of appearance).
         ordered = list(dict.fromkeys(from_anchors + from_json))
 
         if ordered:
             break
 
         LOG.warning(
-            "Fase 1: 0 shortcodes en el intento %d/%d "
-            "(title=%r, %d bytes). Instagram puede estar sirviendo su página "
-            "shell genérica; reintento.",
+            "Phase 1: 0 shortcodes on attempt %d/%d "
+            "(title=%r, %d bytes). Instagram may be serving its generic shell "
+            "page; retrying.",
             attempt, attempts, last_title, len(html),
         )
         if attempt < attempts:
@@ -427,38 +427,38 @@ def discover_shortcodes(client: Client, cfg: ScraperConfig) -> list[str]:
     cfg.stats.discovered = len(ordered)
 
     LOG.info(
-        "Fase 1: %d shortcodes únicos descubiertos (%d anclas, %d blobs JSON)",
+        "Phase 1: %d unique shortcodes discovered (%d anchors, %d JSON blobs)",
         len(ordered), len(from_anchors), len(from_json),
     )
     if len(ordered) < cfg.limit:
         LOG.warning(
-            "Se pidieron %d posts pero la página pública sólo expone %d "
-            "(no hay paginación en el HTML sin sesión; '?page=2' devuelve "
-            "el mismo grid). Se procesarán los %d disponibles.",
+            "%d posts were requested but the public page only exposes %d "
+            "(there is no pagination in the HTML without a session; '?page=2' "
+            "returns the same grid). The %d available ones will be processed.",
             cfg.limit, len(ordered), len(ordered),
         )
     if not ordered:
         LOG.warning(
-            "Tras %d intentos no se halló ningún post para #%s "
-            "(último title=%r). Causas probables: el hashtag no tiene grid "
-            "público, o Instagram está limitando esta IP.",
+            "After %d attempts no post was found for #%s "
+            "(last title=%r). Likely causes: the hashtag has no public "
+            "grid, or Instagram is rate-limiting this IP.",
             attempts, cfg.hashtag, last_title,
         )
     return ordered[: cfg.limit]
 
 
 # --------------------------------------------------------------------------- #
-# Fase 2 - Parseo del embed
+# Phase 2 - Embed parsing
 # --------------------------------------------------------------------------- #
 def parse_embed(html: str, shortcode: str) -> Post:
-    """Extrae autor, caption e imagen desde el HTML del embed.
+    """Extracts author, caption and image from the embed HTML.
 
-    El DOM actual de Instagram no expone og:*, JSON-LD ni <time>, así que
-    todo se resuelve por clases CSS y por las URLs que cuelgan del DOM.
+    Instagram's current DOM exposes no og:*, no JSON-LD and no <time>, so
+    everything is resolved through CSS classes and DOM-hanging URLs.
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    # --- Autor ------------------------------------------------------------ #
+    # --- Author ----------------------------------------------------------- #
     author: str | None = None
     caption_node = soup.find(class_=re.compile(r"\bCaption\b"))
 
@@ -474,17 +474,17 @@ def parse_embed(html: str, shortcode: str) -> Post:
     if caption_node is not None:
         text = caption_node.get_text(" ", strip=True)
         text = RE_COMMENTS_TAIL.sub("", text).strip()
-        # El bloque .Caption incluye el propio nombre de usuario al inicio.
+        # The .Caption block starts with the username itself.
         if author and text.lower().startswith(author.lower()):
             text = text[len(author):].strip()
             if text.lower().startswith("·"):
                 text = text.lstrip("· ").strip()
         caption = text or None
 
-    # --- Imagen principal ------------------------------------------------- #
+    # --- Main image ------------------------------------------------------- #
     image_url, is_video = _extract_media(soup, author)
 
-    # --- Autor por respaldo (alt del propio medio) ------------------------ #
+    # --- Fallback author (alt of the media itself) ------------------------ #
     if author is None:
         for img in soup.find_all("img", alt=True):
             m = RE_AUTHOR_ALT.search(img["alt"])
@@ -502,12 +502,12 @@ def parse_embed(html: str, shortcode: str) -> Post:
 
 
 def is_unavailable(post: Post, html: str) -> bool:
-    """Detecta el "soft 404" de Instagram.
+    """Detects Instagram's "soft 404".
 
-    Importante: para shortcodes inexistentes, privados o eliminados, el embed
-    NO devuelve 404 sino HTTP 200 con una página de aviso
-    ("The link to this photo or video may be broken..."). Sin esta comprobación
-    esos casos se registrarían como posts válidos con todos los campos nulos.
+    Important: for nonexistent, private or deleted shortcodes the embed does
+    NOT return 404 but HTTP 200 with a notice page
+    ("The link to this photo or video may be broken..."). Without this check
+    those cases would be logged as valid posts with all fields null.
     """
     if any(marker in html for marker in SOFT_404_MARKERS):
         return True
@@ -515,19 +515,19 @@ def is_unavailable(post: Post, html: str) -> bool:
 
 
 def _extract_media(soup: BeautifulSoup, author: str | None) -> tuple[str | None, bool]:
-    """Devuelve (url_media, es_video).
+    """Returns (media_url, is_video).
 
-    Jerarquía de selección:
-      1. `img.EmbeddedMediaImage` - ancla estable para la foto del post.
-      2. `<video>` / `<source>`    - reels servidos como MP4.
-      3. Mayor URL .jpg del CDN que no sea el avatar del autor.
+    Selection hierarchy:
+      1. `img.EmbeddedMediaImage` - stable anchor for the post's photo.
+      2. `<video>` / `<source>`    - reels served as MP4.
+      3. Longest .jpg CDN URL that is not the author's avatar.
     """
-    # 1) La foto del post.
+    # 1) The post's photo.
     node = soup.select_one("img.EmbeddedMediaImage")
     if node and node.get("src"):
         return node["src"], False
 
-    # 2) Un reel en MP4: guardamos el frame de portada vía poster.
+    # 2) An MP4 reel: we keep the cover frame via poster.
     video = soup.find("video")
     if video is not None:
         poster = video.get("poster")
@@ -537,8 +537,8 @@ def _extract_media(soup: BeautifulSoup, author: str | None) -> tuple[str | None,
         if source:
             return source["src"], True
 
-    # 3) Respaldo: mayor candidata del CDN, excluyendo avatares y el propio
-    #    usuario, cuyo avatar lleva alt="{username}" y el segmento t51.2885-19.
+    # 3) Fallback: largest CDN candidate, excluding avatars and the user
+    #    themself, whose avatar carries alt="{username}" and t51.2885-19.
     candidates: list[str] = []
     for img in soup.find_all("img", src=True):
         src = img["src"].strip()
@@ -554,28 +554,28 @@ def _extract_media(soup: BeautifulSoup, author: str | None) -> tuple[str | None,
         candidates.append(src)
 
     if candidates:
-        # Las URLs de alta resolución (-15) son más largas; desempata por largo.
+        # High-resolution URLs (-15) are longer; ties broken by length.
         return max(candidates, key=len), False
 
     return None, False
 
 
 def shortcode_to_media_id(shortcode: str) -> int:
-    """Decodifica un shortcode al media ID numérico de Instagram."""
+    """Decodes a shortcode into Instagram's numeric media ID."""
     value = 0
     for char in shortcode:
         try:
             value = value * 64 + SHORTCODE_ALPHABET.index(char)
         except ValueError as exc:
-            raise ValueError(f"shortcode inválido: {shortcode!r}") from exc
+            raise ValueError(f"invalid shortcode: {shortcode!r}") from exc
     return value
 
 
 def infer_published_at(shortcode: str) -> Optional[str]:
-    """Fecha de publicación *inferida* desde el shortcode (snowflake).
+    """*Inferred* publication date from the shortcode (snowflake).
 
-    ADVERTENCIA: es una estimación derivada del ID, no un dato devuelto por
-    Instagram. Se marca como inferida en el JSON resultante.
+    WARNING: it is an estimate derived from the ID, not data returned by
+    Instagram. It is flagged as inferred in the resulting JSON.
     """
     try:
         media_id = shortcode_to_media_id(shortcode)
@@ -586,26 +586,26 @@ def infer_published_at(shortcode: str) -> Optional[str]:
         dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
     except (OverflowError, OSError, ValueError):
         return None
-    # Descarta fechas en el futuro o anteriores a 2010 (ID corrupto).
+    # Discards future dates or ones before 2010 (corrupt ID).
     if dt.year < 2010 or dt > datetime.now(timezone.utc):
         return None
     return dt.isoformat()
 
 
 # --------------------------------------------------------------------------- #
-# Fase 3 - Descarga de imágenes y persistencia
+# Phase 3 - Image download and persistence
 # --------------------------------------------------------------------------- #
 def download_image(
     client: Client, cfg: ScraperConfig, post: Post
 ) -> Optional[Path]:
-    """Descarga la imagen del post a {output_dir}/{shortcode}.jpg."""
+    """Downloads the post's image to {output_dir}/{shortcode}.jpg."""
     if not post.image_url:
-        LOG.warning("[%s] sin URL de imagen; sólo metadata", post.shortcode)
+        LOG.warning("[%s] no image URL; metadata only", post.shortcode)
         return None
 
     dest = cfg.output_dir / f"{post.shortcode}.jpg"
     if dest.exists() and dest.stat().st_size > 0 and not cfg.overwrite:
-        LOG.info("[%s] ya existe, no descargo de nuevo", post.shortcode)
+        LOG.info("[%s] already exists, not downloading again", post.shortcode)
         post.local_image_path = str(dest)
         return dest
 
@@ -614,21 +614,21 @@ def download_image(
             client, post.image_url, retries=cfg.retries, label=f"[{post.shortcode}] "
         )
     except FetchError as exc:
-        LOG.warning("[%s] falló la descarga de imagen: %s", post.shortcode, exc)
+        LOG.warning("[%s] image download failed: %s", post.shortcode, exc)
         return None
 
     if len(body) < 1024:
-        LOG.warning("[%s] respuesta de imagen sospechosamente chica", post.shortcode)
+        LOG.warning("[%s] suspiciously small image response", post.shortcode)
         return None
 
     dest.write_bytes(body)
-    LOG.info("[%s] imagen guardada (%d bytes)", post.shortcode, len(body))
+    LOG.info("[%s] image saved (%d bytes)", post.shortcode, len(body))
     post.local_image_path = str(dest)
     return dest
 
 
 def write_metadata(posts: list[Post], cfg: ScraperConfig) -> Path:
-    """Escribe metadata.json con los posts procesados y las estadísticas."""
+    """Writes metadata.json with the processed posts and the statistics."""
     path = cfg.output_dir / "metadata.json"
     payload = {
         "scraped_at": datetime.now(timezone.utc).isoformat(),
@@ -648,19 +648,19 @@ def write_metadata(posts: list[Post], cfg: ScraperConfig) -> Path:
 # Pipeline
 # --------------------------------------------------------------------------- #
 def run(cfg: ScraperConfig) -> list[Post]:
-    """Pipeline completo: descubrir -> parsear -> descargar -> persistir."""
+    """Full pipeline: discover -> parse -> download -> persist."""
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
     client = build_client(cfg)
     posts: list[Post] = []
 
     try:
-        # --- Fase 1 ------------------------------------------------------- #
+        # --- Phase 1 ------------------------------------------------------ #
         shortcodes = discover_shortcodes(client, cfg)
         if not shortcodes:
             return posts
 
-        # --- Fase 2 + 3 --------------------------------------------------- #
-        LOG.info("Fase 2: procesando %d posts", len(shortcodes))
+        # --- Phase 2 + 3 -------------------------------------------------- #
+        LOG.info("Phase 2: processing %d posts", len(shortcodes))
         for index, shortcode in enumerate(shortcodes, start=1):
             LOG.info(
                 "[%d/%d] %s", index, len(shortcodes), shortcode
@@ -673,7 +673,7 @@ def run(cfg: ScraperConfig) -> list[Post]:
                 )
             except NotFoundError:
                 LOG.warning(
-                    "[%s] 404: post eliminado, privado o inexistente; lo omito",
+                    "[%s] 404: post deleted, private or nonexistent; skipping",
                     shortcode,
                 )
                 cfg.stats.skipped_private += 1
@@ -681,10 +681,10 @@ def run(cfg: ScraperConfig) -> list[Post]:
                 continue
             except RateLimitedError as exc:
                 cfg.stats.rate_limited += 1
-                LOG.error("[%s] rate limit sostenido: %s", shortcode, exc)
-                break  # seguir insistence empeoraría el bloqueo
+                LOG.error("[%s] sustained rate limit: %s", shortcode, exc)
+                break  # further insistence would worsen the block
             except FetchError as exc:
-                LOG.error("[%s] error irrecuperable: %s", shortcode, exc)
+                LOG.error("[%s] unrecoverable error: %s", shortcode, exc)
                 cfg.stats.failed += 1
                 human_delay()
                 continue
@@ -693,11 +693,11 @@ def run(cfg: ScraperConfig) -> list[Post]:
             post = parse_embed(html, shortcode)
             post.scraped_at = datetime.now(timezone.utc).isoformat()
 
-            # Soft 404: Instagram devuelve 200 con un aviso en lugar del post.
+            # Soft 404: Instagram returns 200 with a notice instead of the post.
             if is_unavailable(post, html):
                 LOG.warning(
-                    "[%s] no disponible (eliminado o privado); Instagram "
-                    "responde 200 con aviso de enlace roto; lo omito",
+                    "[%s] not available (deleted or private); Instagram "
+                    "answers 200 with a broken-link notice; skipping",
                     shortcode,
                 )
                 cfg.stats.skipped_private += 1
@@ -710,7 +710,7 @@ def run(cfg: ScraperConfig) -> list[Post]:
 
             if cfg.decode_post_time and not post.caption:
                 LOG.warning(
-                    "[%s] caption vacío; el embed puede haber cambiado de layout",
+                    "[%s] empty caption; the embed layout may have changed",
                     shortcode,
                 )
 
@@ -720,13 +720,13 @@ def run(cfg: ScraperConfig) -> list[Post]:
             posts.append(post)
             cfg.stats.processed += 1
 
-            # Ritmo humano: también después de la última petición.
+            # Human pacing: also after the last request.
             human_delay()
 
     finally:
         client.close()
 
-    # --- Persistencia ----------------------------------------------------- #
+    # --- Persistence ------------------------------------------------------ #
     meta_path = write_metadata(posts, cfg)
     LOG.info("Metadata -> %s", meta_path)
     return posts
@@ -739,41 +739,41 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ig_embed_scraper.py",
         description=(
-            "PoC: extrae posts públicos de Instagram por hashtag vía la ruta "
-            "de embed (sin login ni credenciales)."
+            "PoC: extracts public Instagram posts by hashtag via the embed "
+            "route (no login, no credentials)."
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--hashtag", required=True, help="Hashtag objetivo, sin el '#' (ej. sneakers)"
+        "--hashtag", required=True, help="Target hashtag, without the '#' (e.g. sneakers)"
     )
     parser.add_argument(
         "--limit", type=int, default=10,
-        help="Máximo de posts a procesar (la página pública expone ~12-14)",
+        help="Max posts to process (the public page exposes ~12-14)",
     )
     parser.add_argument(
         "--output-dir", default=None,
-        help="Carpeta de salida (por defecto ./downloads/{hashtag})",
+        help="Output folder (default ./downloads/{hashtag})",
     )
     parser.add_argument(
         "--proxy-url", default=None,
-        help="Proxy HTTP/HTTPS/SOCKS5, ej. socks5://127.0.0.1:9050",
+        help="Proxy HTTP/HTTPS/SOCKS5, e.g. socks5://127.0.0.1:9050",
     )
     parser.add_argument(
-        "--retries", type=int, default=3, help="Reintentos por petición ante 429/5xx"
+        "--retries", type=int, default=3, help="Retries per request on 429/5xx"
     )
-    parser.add_argument("--timeout", type=float, default=25.0, help="Timeout HTTP (s)")
+    parser.add_argument("--timeout", type=float, default=25.0, help="HTTP timeout (s)")
     parser.add_argument(
         "--overwrite", action="store_true",
-        help="Volver a descargar imágenes ya presentes",
+        help="Download again images already present",
     )
     parser.add_argument(
         "--decode-post-time", action="store_true",
-        help="Añade post_published_at INFERIDO desde el shortcode "
-             "(el embed ya no expone la fecha real)",
+        help="Adds INFERRED post_published_at from the shortcode "
+             "(the embed no longer exposes the real date)",
     )
     parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Log en nivel DEBUG"
+        "-v", "--verbose", action="store_true", help="Log at DEBUG level"
     )
     return parser
 
@@ -793,10 +793,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 
     hashtag = normalize_hashtag(args.hashtag)
     if not hashtag:
-        print("Error: --hashtag no puede quedar vacío.", file=sys.stderr)
+        print("Error: --hashtag cannot be empty.", file=sys.stderr)
         return 2
     if args.limit < 1:
-        print("Error: --limit debe ser >= 1.", file=sys.stderr)
+        print("Error: --limit must be >= 1.", file=sys.stderr)
         return 2
 
     output_dir = (
@@ -816,20 +816,20 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         overwrite=args.overwrite,
     )
 
-    LOG.info("Hashtag #%s | limit=%d | salida=%s", hashtag, cfg.limit, output_dir)
+    LOG.info("Hashtag #%s | limit=%d | output=%s", hashtag, cfg.limit, output_dir)
     posts = run(cfg)
 
     s = cfg.stats
     LOG.info(
-        "Terminado: %d procesados (%d imágenes), %d 404 omitidos, "
-        "%d rate-limited, %d fallidos",
+        "Done: %d processed (%d images), %d 404 skipped, "
+        "%d rate-limited, %d failed",
         s.processed, s.images_saved, s.skipped_private, s.rate_limited, s.failed,
     )
 
     if not posts:
         print(
-            "\nNo se obtuvo ningún post. Causas probables: hashtag inexistente, "
-            "login wall de Instagram, o IP bloqueada (probá con --proxy-url).",
+            "\nNo posts were obtained. Likely causes: nonexistent hashtag, "
+            "Instagram login wall, or blocked IP (try --proxy-url).",
             file=sys.stderr,
         )
         return 1

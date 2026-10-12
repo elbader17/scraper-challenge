@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Tests del store incremental y de la política de reintentos.
+Tests for the incremental store and the retry policy.
 
 Sin red: todo se verifica con dobles de prueba. El objetivo es que estas reglas
-no se rompan en silencio, porque en una corrida de miles de posts un error acá
+do not break silently, because in a run of thousands of posts an error here
 se traduce en datos perdidos que nadie nota hasta el final.
 
     python test_ig_google.py
@@ -53,7 +53,7 @@ st.mark_ok("AAA1111111", query="q", author="a", caption="c",
 st.mark_terminal("BBB2222222", "unavailable", "soft-404")
 check("pending excluye ok/unavailable", len(st.pending()) == 0,
       f"quedan {[r['shortcode'] for r in st.pending()]}")
-check("pending vacío => nada que procesar en la segunda corrida",
+check("empty pending => nothing to process on the second run",
       all(r["shortcode"] not in ("AAA1111111", "BBB2222222") for r in st.pending()))
 
 st2 = PostStore(tmpdb())
@@ -97,7 +97,7 @@ errs = s_e.errors_for("FFF6666666")
 check("queda un error por intento fallido", len(errs) == 3, f"hay {len(errs)}")
 
 # --------------------------------------------------------------------------- #
-print("\n== retries: política de reintentos ==")
+print("\n== retries: retry policy ==")
 # --------------------------------------------------------------------------- #
 
 
@@ -116,8 +116,8 @@ t0 = time.time()
 r = G.with_retries(Boom(G.FetchError("500"), 2), attempts=3,
                    base_delay=0.05, max_delay=0.2)
 check("reintenta y termina bien", r == "ok")
-check("no duerme entre el último intento", time.time() - t0 < 0.6,
-      f"tardó {time.time()-t0:.2f}s")
+check("no sleep after the last attempt", time.time() - t0 < 0.6,
+      f"took {time.time()-t0:.2f}s")
 
 f = Boom(G.RateLimitedError("429", retry_after=0.1), 1)
 r = G.with_retries(f, attempts=3, base_delay=0.05, max_delay=0.5)
@@ -130,26 +130,26 @@ try:
 except G.RateLimitedError:
     pass
 check("Retry-After se capped por max_delay", time.time() - t0 < 1.0,
-      "esperar 30s de golpe rompería la corrida; debe estar acotado")
+      "waiting 30s at once would break the run; it must be capped")
 
 nf = Boom(G.NotFoundError("404"), 5)
 try:
     G.with_retries(nf, attempts=5, base_delay=0.05)
 except G.NotFoundError:
     pass
-check("404 no se reintenta (es terminal)", nf.calls == 1, f"llamó {nf.calls} veces")
+check("404 is not retried (terminal)", nf.calls == 1, f"called {nf.calls} times")
 
 boom = Boom(G.FetchError("500"), 99)
 try:
     G.with_retries(boom, attempts=3, base_delay=0.01, max_delay=0.05)
 except G.FetchError:
     pass
-check("agotado el límite, propaga el error", boom.calls == 3, f"llamó {boom.calls}")
+check("attempts exhausted, propagates the error", boom.calls == 3, f"called {boom.calls}")
 
 errs_logged = []
 G.with_retries(Boom(G.FetchError("500"), 2), attempts=3, base_delay=0.01,
                max_delay=0.02, on_error=lambda a, e: errs_logged.append(a))
-check("on_error notifica cada fallo", errs_logged == [1, 2], f"recibió {errs_logged}")
+check("on_error reports every failure", errs_logged == [1, 2], f"received {errs_logged}")
 
 # --------------------------------------------------------------------------- #
 print("\n== Retry-After: parsing ==")
@@ -159,20 +159,20 @@ check("header ausente -> None", G.parse_retry_after(None) is None)
 check("header basura -> None", G.parse_retry_after("pronto") is None)
 futuro = G.parse_retry_after("Wed, 21 Oct 2099 07:28:00 GMT")
 check("header en fecha HTTP", futuro is not None and futuro > 100000,
-      f"devolvió {futuro}")
+      f"returned {futuro}")
 check("header en pasado -> 0", G.parse_retry_after("Wed, 21 Oct 2020 07:28:00 GMT") == 0.0)
 
 # --------------------------------------------------------------------------- #
-print("\n== _check: clasificación de errores HTTP ==")
+print("\n== _check: HTTP error classification ==")
 # --------------------------------------------------------------------------- #
 for status, exc in ((429, G.RateLimitedError), (404, G.NotFoundError),
                     (500, G.FetchError), (403, G.FetchError)):
     try:
         G.CurlCffiClient._check(status, "u", "7")
-        check(f"{status} lanza excepción", False, "no lanzó")
+        check(f"{status} raises", False, "did not raise")
     except Exception as e:
         check(f"{status} -> {exc.__name__}", isinstance(e, exc),
-              f"lanzó {type(e).__name__}")
+              f"raised {type(e).__name__}")
     except G.FetchError:
         pass
 
@@ -246,13 +246,13 @@ from datetime import datetime as _dt, timezone as _tz
 
 p_webp = InstagramPost(shortcode="ABC1234567", source_serp_url="u",
                        scraped_at=_dt.now(_tz.utc), image_url="http://cdn/x.jpg")
-check("guarda WebP con extensión .webp",
+check("saves WebP with the .webp extension",
       G.download_image(_ImgClient(webp), out_i, p_webp, False)
       and (out_i / "ABC1234567.webp").exists(),
       f"archivos: {[f.name for f in out_i.iterdir()]}")
 check("no re-descarga si ya existe (idempotente)",
       not G.download_image(_ImgClient(webp), out_i, p_webp, False))
-check("local_image_path apunta a la extensión correcta",
+check("local_image_path points to the correct extension",
       p_webp.local_image_path.endswith("ABC1234567.webp"),
       f"apunta a {p_webp.local_image_path}")
 check("--overwrite re-descarga",
@@ -281,7 +281,7 @@ check("N slots quedan espaciados >= min_interval",
       all(b - a >= 0.045 for a, b in zip(sorted(hits), sorted(hits)[1:])),
       f"separaciones={[round(b-a,3) for a,b in zip(sorted(hits), sorted(hits)[1:])]}")
 check("8 slots a 0.05s tardan ~0.35s (no 8x0.05 en paralelo)", 0.30 < dur < 1.2,
-      f"tardó {dur:.2f}s")
+      f"took {dur:.2f}s")
 
 rl0 = G.RateLimiter(0)
 t0 = time.monotonic()
@@ -325,22 +325,22 @@ qa = argparse.Namespace(query=["zapatillas", "trail running"], queries_file=str(
 kws = G.resolve_keywords(qa)
 check("dedup y sanea la cola",
       kws == ["zapatillas", "trail running", "running shoes"], f"obtuvo {kws}")
-check("descarta comentarios y líneas vacías", "# comentario" not in kws)
+check("discards comments and empty lines", "# comentario" not in kws)
 check("quita comillas", G.resolve_keywords(
     argparse.Namespace(query=['"moda"'], queries_file=None)) == ["moda"])
 try:
     G.resolve_keywords(argparse.Namespace(query=None, queries_file=None))
-    check("sin keywords debe fallar", False, "no falló")
+    check("no keywords should fail", False, "did not fail")
 except SystemExit:
     check("sin keywords debe fallar", True)
 
 # --------------------------------------------------------------------------- #
-print("\n== discovery: clasificación de fallos ==")
+print("\n== discovery: failure classification ==")
 # --------------------------------------------------------------------------- #
 
 
 class _Serp:
-    """SERP falsa que falla con la excepción que se le pida."""
+    """Fake SERP that fails with whichever exception it is given."""
 
     def __init__(self, exc, n_ok=0):
         self.exc, self.n_ok, self.calls = exc, n_ok, 0
@@ -350,7 +350,7 @@ class _Serp:
         if self.calls <= self.n_ok:
             return {"ZZZ0000000"}, "u"
         if self.exc is None:
-            return set(), "u"  # consulta válida que no devuelve nada
+            return set(), "u"  # valid query returning nothing
         raise self.exc
 
 
@@ -382,7 +382,7 @@ s_backoff = _Serp(G.RateLimitedError("429", retry_after=0.01), n_ok=0)
 t0 = time.time()
 G.discover(s_backoff, "kw", 10, 1, 1, 100, (0, 0), st_back, retries=3)
 check("discovery reintenta el 429 con backoff (no lo pierde de una)",
-      s_backoff.calls >= 2, f"llamó {s_backoff.calls} veces")
+      s_backoff.calls >= 2, f"called {s_backoff.calls} times")
 
 # --------------------------------------------------------------------------- #
 print("\n== metadata enriquecida: blob GraphQL del embed ==")
@@ -440,8 +440,8 @@ check("carousel: 3 hijos y sus shortcodes",
       m["carousel_count"] == 3
       and m["carousel_shortcodes"] == ["DN292RBXED5", "DN291KHXOgP", "DN292REXMRr"],
       f"obtuvo {m['carousel_count']}")
-check("elige la resolución más grande (1440, no 720)",
-      m["best_url"].endswith("1440.jpg"), f"eligió {m['best_url']}")
+check("picks the largest resolution (1440, not 720)",
+      m["best_url"].endswith("1440.jpg"), f"picked {m['best_url']}")
 
 check("embed liviano -> sin metadata, no rompe", G.extract_context_json(HTML_LIGHT) is None)
 check("HTML sin contextJSON -> None", G.extract_context_json("<html>nada</html>") is None)
@@ -450,7 +450,7 @@ check("contextJSON corrupto -> None, no lanza",
 
 enr = G._enrich_from_gql(HTML_RICH, "DN292ZY3K4y")
 check("enriquecimiento con blob: rich_metadata=True", enr["rich_metadata"] is True)
-check("enriquecimiento sube la URL a la mejor resolución",
+check("enrichment upgrades the URL to the best resolution",
       enr["image_url"].endswith("1440.jpg"))
 enr_null = G._enrich_from_gql(HTML_LIGHT, "DWOQtEyDc1Q")
 check("embed liviano: rich_metadata ausente, pero la fecha sigue",
@@ -468,7 +468,7 @@ check("shortcode -> media id",
 dt = G.shortcode_to_datetime("DN292ZY3K4y")
 check("fecha coincide con la del id del embed",
       dt.isoformat().startswith("2025-08-27T12:42:16"), f"obtuvo {dt}")
-# Validación cruzada contra captions que declaran su propio mes/año:
+# Cross-validation against captions that declare their own month/year:
 # "Running shoes dropping in August 2026" y "... in March 2026".
 check("'dropping in August 2026' -> 2026-08",
       G.shortcode_to_datetime("DbggwHEER81").strftime("%Y-%m") == "2026-08",
@@ -478,10 +478,10 @@ check("'dropping in March 2026' -> 2026-03",
       G.shortcode_to_datetime("DVWQjTbjmri").isoformat())
 check("'guide to running shoes in 2026' -> 2026",
       G.shortcode_to_datetime("DYHxVb0iEI2").year == 2026)
-check("shortcode inválido no lanza", G.shortcode_to_datetime("corto!") is None)
+check("invalid shortcode does not raise", G.shortcode_to_datetime("corto!") is None)
 
 print("\n" + "=" * 58)
 if FALLOS:
     print(f"FALLARON {len(FALLOS)}: {FALLOS}")
     sys.exit(1)
-print("TODOS LOS TESTS PASARON")
+print("ALL TESTS PASSED")

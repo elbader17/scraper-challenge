@@ -1,53 +1,54 @@
-# Instagram Hashtag Scraper (PoC) — vía Embeddings públicos
+# Instagram Hashtag Scraper (PoC) — via public Embeds
 
-Extrae publicaciones públicas de Instagram a partir de un hashtag **sin login y sin
-credenciales de usuario**, usando la ruta pública de *embeds*. Probado end-to-end.
+Extracts public Instagram posts from a hashtag **without login and without user
+credentials**, using the public *embed* path. Proven end-to-end.
 
-El proyecto tiene **tres** estrategias de descubrimiento, todas sin autenticación:
+The project has **four** discovery strategies, all unauthenticated:
 
-| Script | Descubre posts vía | Estado |
+| Script | Discovers posts via | Status |
 |---|---|---|
-| `ig_embed_scraper.py` | Grid público del hashtag | Funciona (techo ~12-14 posts) |
-| `ig_serp_scraper.py` | DuckDuckGo (dorks `site:`) | Funciona con pacing lento |
-| `ig_google_scraper.py` | **Google** (dorks + paginación `start=`) | Funciona con `--interactive`; reintentos + checkpoint |
+| `ig_embed_scraper.py` | Hashtag public grid | Works (ceiling ~12-14 posts) |
+| `ig_serp_scraper.py` | DuckDuckGo (`site:` dorks) | Works with slow pacing |
+| `ig_google_scraper.py` | **Google** (dorks + `start=` pagination) | Works with `--interactive`; retries + checkpoint |
+| `ig_hashtag_breadth.py` | **Hashtag grid, no search engine** | **No CAPTCHA, no browser, $0** |
 
-## Instalación
+## Install
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Uso
+## Usage
 
 ```bash
-# Básico (salida por defecto: ./downloads/sneakers)
+# Basic (default output: ./downloads/sneakers)
 python ig_embed_scraper.py --hashtag sneakers --limit 5
 
-# Con proxy (HTTP/HTTPS/SOCKS5)
+# With proxy (HTTP/HTTPS/SOCKS5)
 python ig_embed_scraper.py --hashtag sneakers --limit 20 --proxy-url socks5://127.0.0.1:9050
 
-# Añadir fecha de publicación INFERIDA + verbose
+# Add INFERRED publication date + verbose
 python ig_embed_scraper.py --hashtag sneakers --limit 5 --decode-post-time -v
 ```
 
-| Flag | Default | Descripción |
+| Flag | Default | Description |
 |---|---|---|
-| `--hashtag` | *(obligatorio)* | Hashtag sin `#` |
-| `--limit` | `10` | Máximo de posts a procesar |
-| `--output-dir` | `./downloads/{hashtag}` | Carpeta de salida |
-| `--proxy-url` | — | `http://`, `https://` o `socks5://` |
-| `--retries` | `3` | Reintentos ante 429/5xx |
-| `--timeout` | `25` | Timeout HTTP (s) |
-| `--overwrite` | `False` | Re-descargar imágenes ya presentes |
-| `--decode-post-time` | `False` | Añade `post_published_at` inferido |
-| `-v/--verbose` | `False` | Log DEBUG |
+| `--hashtag` | *(required)* | Hashtag without `#` |
+| `--limit` | `10` | Maximum posts to process |
+| `--output-dir` | `./downloads/{hashtag}` | Output folder |
+| `--proxy-url` | — | `http://`, `https://` or `socks5://` |
+| `--retries` | `3` | Retries on 429/5xx |
+| `--timeout` | `25` | HTTP timeout (s) |
+| `--overwrite` | `False` | Re-download images already present |
+| `--decode-post-time` | `False` | Adds inferred `post_published_at` |
+| `-v/--verbose` | `False` | DEBUG logging |
 
-## Salida
+## Output
 
 ```
 downloads/sneakers/
-├── Dcs-O8mxFaj.jpg      # foto a resolución completa del post
+├── Dcs-O8mxFaj.jpg      # photo at full resolution of the post
 ├── DbCInidPZid.jpg
 └── metadata.json
 ```
@@ -76,303 +77,346 @@ downloads/sneakers/
 }
 ```
 
-## Cómo funciona
+## How it works
 
-**Fase 1 — Descubrimiento.** `GET /explore/tags/{hashtag}/` devuelve el HTML renderizado
-en servidor. Los shortcodes salen de dos fuentes: anclas `<a href="/reel/{code}/">` y
-blobs `"code":"{code}"`.
+**Phase 1 — Discovery.** `GET /explore/tags/{hashtag}/` returns server-rendered HTML.
+Shortcodes come from two sources: `<a href="/reel/{code}/">` anchors and
+`"code":"{code}"` blobs.
 
-**Fase 2 — Embed.** `GET /p/{shortcode}/embed/captioned/` responde 200 sin sesión y
-contiene autor, caption y la imagen.
+**Phase 2 — Embed.** `GET /p/{shortcode}/embed/captioned/` responds 200 without a
+session and contains author, caption and image.
 
-**Fase 3 — Persistencia.** Descarga `{shortcode}.jpg` y escribe `metadata.json`.
+**Phase 3 — Persistence.** Downloads `{shortcode}.jpg` and writes `metadata.json`.
 
-## Estrategia Google — `ig_google_scraper.py`
+## The CAPTCHA-free strategy — `ig_hashtag_breadth.py`
 
-Posts de Instagram **indexados en Google**, discovery por dorks y paginación real,
-y extracción vía el mismo embed público (que sí funciona sin bloqueo).
+**Start here.** It removes the search engine from the picture entirely: it visits the
+hashtag's public page directly and reads the grid Instagram already renders.
+
+- **No CAPTCHA.** No search engine means nothing to unblock.
+- **No cookies, no Chrome, no browser profile, $0.**
+- **No human in the loop.** Fully unattended.
 
 ```bash
-# Recomendado: abre un Chrome, resolvés la verificación una vez y sigue
+# 20 posts, no interaction whatsoever
+python ig_hashtag_breadth.py --hashtag running --limit 20
+
+# Several tags
+python ig_hashtag_breadth.py --hashtag running --hashtag sneakers --hashtag yoga --limit 20
+
+# Scale: from a file, with concurrency
+python ig_hashtag_breadth.py --hashtags-file tags.txt --limit 500 --workers 6 --rate 0.4
+```
+
+Verified run: **20/20 posts, 20/20 images, 0 failures**, all with enriched metadata
+(likes, followers, inferred date, author, caption).
+
+**The ceiling is breadth, not depth.** Each hashtag exposes ~12-14 posts and does not
+paginate, but distinct tags overlap only ~25%, so the unit of scale is the *number of
+tags*: 100 tags ≈ 850 posts, 500 tags ≈ 4,000 posts.
+
+Full rationale and measurements: [`BREADTH-SOLUTION.md`](./BREADTH-SOLUTION.md).
+
+## Google strategy — `ig_google_scraper.py`
+
+Instagram posts **indexed in Google**, discovery via dorks and real pagination,
+and extraction through the same public embed (which does work without blocking).
+
+```bash
+# Recommended: opens a Chrome, you solve the verification once, then it continues
 python ig_google_scraper.py --query "running shoes" --limit 30 --interactive
 
-# Con proxy (sólo si además estás detrás de una IP bloqueada)
+# With proxy (only if you are also behind a blocked IP)
 python ig_google_scraper.py --query "running shoes" --limit 30 \
-  --proxy-url http://usuario:clave@host:puerto
+  --proxy-url http://user:pass@host:port
 
-# Sin depender de Google: shortcodes ya conocidos -> directo al embed
+# Without depending on Google: known shortcodes -> straight to the embed
 python ig_google_scraper.py --query sneakers --shortcodes DYHxVb0iEI2,DceGJtwimbX
 ```
 
-`--interactive` requiere `pip install websockets`. Google tiene una ventaja
-estructural sobre DDG: **sí pagina**, con `start=0,100,200…` y `num=100`. DDG
-no (`&s=10` devuelve 202), por eso esa estrategia rota dorks.
+`--interactive` requires `pip install websockets`. Google has one structural
+advantage over DDG: **it does paginate**, with `start=0,100,200…` and `num=100`.
+DDG does not (`&s=10` returns 202), which is why that strategy rotates dorks.
 
-### Hallazgo crítico: Google no entrega la SERP sin una sesión resuelta
+### Critical finding: Google does not deliver the SERP without a resolved session
 
-Medido empíricamente, en este orden:
+Empirically measured, in this order:
 
-1. **La vía HTTP pelada devuelve un shell que exige JavaScript.** ~92 KB, 200 OK,
-   **3 anclas**, cero resultados. No es un error: un scraper ingenuo reporta
-   "0 posts" cuando en realidad nunca vio la SERP.
-2. **Con Chromium headless el DOM se renderiza, pero Google responde CAPTCHA**
-   ("Our systems have detected unusual traffic…"), también como un 200 más.
-3. **Los TLD se comportan igual** (`.com`, `.es`, `.com.ar`, `.co.uk`, `.ca`,
-   `.mx`): el bloqueo no es de dominio. Probado sin éxito: cookie `CONSENT`,
+1. **The bare HTTP path returns a shell that demands JavaScript.** ~92 KB, 200 OK,
+   **3 anchors**, zero results. That is not an error: a naive scraper reports
+   "0 posts" when it actually never saw the SERP.
+2. **With headless Chromium the DOM renders, but Google answers with a CAPTCHA**
+   ("Our systems have detected unusual traffic…"), also as a 200.
+3. **TLDs behave identically** (`.com`, `.es`, `.com.ar`, `.co.uk`, `.ca`, `.mx`):
+   the block is not domain-based. Tried unsuccessfully: `CONSENT` cookie,
    `gbv=1`, `udm=14`, `udm=2`, `tbm=isch`, `tbm=vid`, `client=firefox-b-d`,
-   `client=ubuntu`, UA de Lynx, `pws=0`, `safe=off`. Tampoco es transitorio
-   (reintentado a los 75 s).
-4. **El DOM de Google esconde los enlaces.** La SERP renderizada muestra los
-   resultados (autor, like, fecha) pero los `<a>` de resultado **no tienen
-   `href`**, y tampoco aparecen al recorrer shadow DOM. Por eso leer el DOM del
-   navegador no sirve: hay que volver a pedir la página por HTTP.
-5. **La solución: las cookies de una sesión que ya pasó el CAPTCHA.** Con un
-   Chrome real donde el usuario resuelve la verificación una vez, y exportando
-   sus cookies por CDP (`NID`, `SNID`, `GOOGLE_ABUSE_EXEMPTION`, `AEC`, `DV`),
-   la vía HTTP común pasa a devolver la SERP completa: 579 KB y 10 shortcodes
-   en la primera consulta.
+   `client=ubuntu`, Lynx user-agent, `pws=0`, `safe=off`. It is not transient
+   either (retried after 75 s).
+4. **Google's DOM hides the links.** The rendered SERP shows results (author,
+   like count, date) but the result `<a>` elements **have no `href`**, and they do
+   not appear when walking shadow DOM either. That is why reading the browser DOM
+   does not work: you have to request the page over HTTP again.
+5. **The solution: cookies from a session that already passed the CAPTCHA.** With a
+   real Chrome where the user solves the verification once, and exporting its
+   cookies over CDP (`NID`, `SNID`, `GOOGLE_ABUSE_EXEMPTION`, `AEC`, `DV`), the
+   common HTTP path starts returning the full SERP: 579 KB and 10 shortcodes on the
+   first query.
 
-De ahí el diseño de `--interactive`: el navegador **no** se usa para scrapear,
-sino sólo para destrabar el CAPTCHA. Después el scraping corre por HTTP, que es
-más rápido y no vuelve a pedir la verificación. El perfil es persistente, así
-que las corridas siguientes reutilizan lo ya resuelto.
+Hence the `--interactive` design: the browser is **not** used to scrape, only to
+unblock the CAPTCHA. Afterwards scraping runs over HTTP, which is faster and does
+not ask for verification again. The profile is persistent, so subsequent runs
+reuse what was already resolved.
 
-### Trampa: `/sorry/index` no sirve como detector de CAPTCHA
+### Trap: `/sorry/index` is useless as a CAPTCHA detector
 
-Una SERP legítima **contiene** un enlace a `/sorry/index` en su HTML. Usarla
-como marcador produjo un falso positivo que hacía esperar un captcha inexistente
-(el script quedó en loop sobre una SERP válida con 11 shortcodes). La detección
-correcta combina `location.pathname` con el texto "unusual traffic".
+A legitimate SERP **contains** a link to `/sorry/index` in its HTML. Using it as a
+marker produced a false positive that made it wait for a nonexistent captcha (the
+script ended up looping over a valid SERP with 11 shortcodes). Correct detection
+combines `location.pathname` with the text "unusual traffic".
 
-### Verificación end-to-end
+### End-to-end verification
 
 ```
-Chrome listo (wayland). Perfil: /root/.ig_google_profile
-  SERP cargada (11 shortcodes); exportando cookies…
-  Cookies obtenidas: AEC, DV, GOOGLE_ABUSE_EXEMPTION, NID, SEARCH_SAMESITE, SNID, _GRECAPTCHA, __Secure-STRP
-Fase 1: 13 shortcodes únicos descubiertos
-Fase 2/3: 12 posts, 12 imágenes -> output/google_running_shoes/metadata.json
+Chrome ready (wayland). Profile: /root/.ig_google_profile
+  SERP loaded (11 shortcodes); exporting cookies…
+  Cookies obtained: AEC, DV, GOOGLE_ABUSE_EXEMPTION, NID, SEARCH_SAMESITE, SNID, _GRECAPTCHA, __Secure-STRP
+Phase 1: 13 unique shortcodes discovered
+Phase 2/3: 12 posts, 12 images -> output/google_running_shoes/metadata.json
 ```
 
-Sin proxy, sin login, sin credenciales: 13 shortcodes descubiertos en Google y
-12 posts con imagen a resolución completa, todos con autor y caption reales.
+Without proxy, without login, without credentials: 13 shortcodes discovered in
+Google and 12 posts with a full-resolution image, all with real author and caption.
 
-### Escala: concurrencia, cola de keywords y frenado
+### Scale: concurrency, keyword queue and throttling
 
 ```bash
-# Varios keywords en cola (repetible o desde archivo)
+# Several keywords queued (repeatable or from a file)
 python ig_google_scraper.py --query "running shoes" --query "trail running" \
   --limit 500 --interactive --workers 6 --rate 0.4 --discovery-rate 6
 
-# Desde archivo (usa # para comentarios)
+# From a file (uses # for comments)
 python ig_google_scraper.py --queries-file keywords.txt --limit 500 --interactive
 
-# Si se corta (Ctrl-C, caída, red), se retoma desde donde quedó
+# If it gets interrupted (Ctrl-C, crash, network), it resumes where it left off
 python ig_google_scraper.py --queries-file keywords.txt --limit 500 --resume
 ```
 
-| Flag | Default | Para qué |
+| Flag | Default | For what |
 |---|---|---|
-| `--query` | — | Keyword. **Repetible** para armar una cola |
-| `--queries-file` | — | Archivo con una keyword por línea |
-| `--workers` | `1` | Workers concurrentes en la fase 2/3 |
-| `--rate` | `0` | Segundos entre requests a Instagram. `0` = sin freno |
-| `--discovery-rate` | `0` | Segundos entre consultas a Google. Si es `0` usa `--rate` |
-| `--discovery-retries` | `2` | Reintentos por consulta de Google ante 429 |
-| `--db` | `<output-dir>/posts.sqlite3` | Base incremental |
-| `--resume` | `False` | Omite posts ya terminados y sigue con los pendientes |
-| `--retry-failed` | `False` | Reincluye los que quedaron en `failed` |
-| `--retries` | `3` | Intentos por post ante 429/5xx |
-| `--retry-delay` / `--retry-max-delay` | `2` / `60` | Backoff exponencial, en segundos |
+| `--query` | — | Keyword. **Repeatable** to build a queue |
+| `--queries-file` | — | File with one keyword per line |
+| `--workers` | `1` | Concurrent workers in phase 2/3 |
+| `--rate` | `0` | Seconds between requests to Instagram. `0` = no brake |
+| `--discovery-rate` | `0` | Seconds between Google queries. If `0` uses `--rate` |
+| `--discovery-retries` | `2` | Retries per Google query on 429 |
+| `--db` | `<output-dir>/posts.sqlite3` | Incremental database |
+| `--resume` | `False` | Skips finished posts and continues with pending ones |
+| `--retry-failed` | `False` | Re-includes those left as `failed` |
+| `--retries` | `3` | Attempts per post on 429/5xx |
+| `--retry-delay` / `--retry-max-delay` | `2` / `60` | Exponential backoff, in seconds |
 
-**Rendimiento medido** (12 posts, misma máquina):
+**Measured performance** (12 posts, same machine):
 
-| Config | Tiempo |
+| Config | Time |
 |---|---|
-| 1 worker, sin freno | 9.24 s |
-| 6 workers, sin freno | **2.09 s** (4.4x) |
+| 1 worker, no brake | 9.24 s |
+| 6 workers, no brake | **2.09 s** (4.4x) |
 | 6 workers, `--rate 0.3` | 7.23 s |
 
-Proyectado a 3000 posts: **~4.4 h → ~30 min**. El freno global es lo que te
-permite bajar la velocidad sin tocar código cuando Instagram empieza a cortar.
+Projected to 3000 posts: **~4.4 h → ~30 min**. The global brake is what lets you
+lower the speed without touching code when Instagram starts cutting.
 
-**El rate limiter reserva el slot bajo lock pero espera fuera del lock.** Si no,
-los workers se serializarían de a uno y la concurrencia no serviría de nada.
-Instagram no publica su límite: medido empíricamente, a ~3 req/s (`--rate 0.3`)
-no hubo un solo 429.
+**The rate limiter reserves the slot under the lock but waits outside it.** If not,
+workers would serialize one at a time and concurrency would be pointless. Instagram
+does not publish its limit: measured empirically, at ~3 req/s (`--rate 0.3`) there
+was not a single 429.
 
-### Por qué Google y no sólo dorks: el techo
+### Why Google and not only dorks: the ceiling
 
-Una keyword rinde ~63 shortcodes únicos (medido con 8 dorks: 81 devueltos, 63
-únicos, **78% de solapamiento**). Google indexa lo mismo bajo todos esos
-filtros, así que rotar dorks rinde poco y la cola de keywords es el mecanismo
-real para llegar a miles.
+One keyword yields ~63 unique shortcodes (measured with 8 dorks: 81 returned, 63
+unique, **78% overlap**). Google indexes the same content under all those
+filters, so rotating dorks yields little and the keyword queue is the real
+mechanism to reach thousands.
 
-Lo que **sí** aporta son las páginas: `start=0` dio 14 shortcodes y `start=100`
-dio 10 más, todos nuevos.
+What **does** help is the pages: `start=0` gave 14 shortcodes and `start=100` gave
+10 more, all new.
 
-### Google te va a frenar si no lo frenás vos
+### Google will throttle you if you don't throttle it
 
-Después de un uso sostenido, Google empieza a devolver **429** en las consultas
-de discovery. El script reintenta con backoff y, si sigue, lo dice con sus
-palabras:
+After sustained use, Google starts returning **429** on discovery queries. The
+script retries with backoff and, if it persists, says so in its own words:
 
 ```
-WARNING  Google limita el ritmo (429) tras 3 intentos; corré --rate más alto o esperá
+WARNING  Google is rate limiting (429) after 3 attempts; run with a higher --rate or wait
 ```
 
-`--discovery-rate 6` (una consulta cada 6 s) evitó los 429 por completo en las
-corridas de prueba. Los contadores de `stats` separan a propósito tres cosas que
-antes se confundían: `blocked_queries` (captcha), `js_shell_queries` (no vi la
-SERP) y `rate_limited_queries` (nos está frenando). **Ninguna de las tres es
-"no hay resultados"**, y el mensaje final lo dice con precisión.
+`--discovery-rate 6` (one query every 6 s) avoided 429s entirely in test runs. The
+`stats` counters deliberately separate three things that used to be conflated:
+`blocked_queries` (captcha), `js_shell_queries` (never saw the SERP) and
+`rate_limited_queries` (it is throttling us). **None of the three is "no results"**,
+and the final message says so precisely.
 
-### Decisiones de diseño que importan a escala
+### Design decisions that matter at scale
 
-1. **Autocommit.** Cada post se escribe en SQLite en cuanto se procesa. Sin
-   `close()`: se verificó que un corte abrupto no pierde lo ya hecho.
-2. **`metadata.json` se reconstruye desde la base**, no desde la corrida. Por eso
-   el archivo final refleja todo el conocimiento acumulado aunque la corrida se
-   haya cortado a la mitad.
-3. **Un 429 no pierde posts.** Se espera el `Retry-After` que manda el servidor
-   (acotado por `--retry-max-delay`) y se reintenta con backoff exponencial con
-   jitter. Un 404 no se reintenta nunca: es terminal por definición.
-4. **Los fallos quedan registrados** en la tabla `errors`, con shortcode, intento
-   y mensaje. `failed` no se reintenta solo en la corrida siguiente salvo que
-   pidas `--retry-failed`, para no Ciclar eternamente sobre un post inalcanzable.
-5. **Con `--resume`, un discovery bloqueado no aborta la corrida**: se sigue con
-   lo que ya está en la base. Sin esto, retomar una corrida de Google obligaba a
-   rehacer el bootstrap del CAPTCHA.
-6. **El store es thread-safe**: `check_same_thread=False` + lock sobre las
-   escrituras. Una conexión SQLite compartida sin serializar corrompe la base.
-7. **La extensión se decide por los bytes**, no por la URL. El CDN de Instagram
-   sirve WebP aunque la URL termine en `.jpg` — medido en 2 de 24 posts de una
-   corrida real. Guardar WebP como `.jpg` rompe PIL, torchvision y ffmpeg.
+1. **Autocommit.** Every post is written to SQLite as soon as it is processed.
+   Without `close()`: it was verified that an abrupt interruption does not lose
+   what was already done.
+2. **`metadata.json` is rebuilt from the database**, not from the run. That is why
+   the final file reflects all accumulated knowledge even if the run was cut in
+   half.
+3. **A 429 does not lose posts.** It waits for the `Retry-After` the server sends
+   (capped by `--retry-max-delay`) and retries with exponential backoff plus jitter.
+   A 404 is never retried: it is terminal by definition.
+4. **Failures are logged** in the `errors` table, with shortcode, attempt and
+   message. `failed` is not retried on its own in the next run unless you ask for
+   `--retry-failed`, so it does not cycle forever over an unreachable post.
+5. **With `--resume`, a blocked discovery does not abort the run**: it continues
+   with what is already in the database. Without this, resuming a Google run forced
+   redoing the CAPTCHA bootstrap.
+6. **The store is thread-safe**: `check_same_thread=False` + lock around writes. A
+   shared SQLite connection without serializing corrupts the database.
+7. **The extension is decided by the bytes, not by the URL.** Instagram's CDN serves
+   WebP even when the URL ends in `.jpg` — measured in 2 of 24 posts of a real run.
+   Saving WebP as `.jpg` breaks PIL, torchvision and ffmpeg.
 
-### Metadata enriquecida: el blob que ya venía y se descartaba
+### Enriched metadata: the blob that was already there and being discarded
 
-El embed renderizado incluye un `contextJSON` con `gql_data.shortcode_media`: una
-respuesta GraphQL real. El scraper ahora la parsea y agrega campos que antes se
-perdía, **sin un solo request extra**.
+The rendered embed includes a `contextJSON` with `gql_data.shortcode_media`: a real
+GraphQL response. The scraper now parses it and adds fields that were previously
+lost, **with not a single extra request**.
 
-| Campo | Qué es |
+| Field | What it is |
 |---|---|
 | `likes`, `comments` | `edge_liked_by.count`, `edge_media_to_comment.count` |
 | `author_followers` | `owner.edge_followed_by.count` |
 | `author_verified` | `owner.is_verified` |
-| `width`, `height` | dimensiones reales |
-| `alt_text` | `accessibility_caption` (alt-text de Instagram) |
-| `carousel_count`, `carousel_shortcodes` | diapositivas del carrusel |
-| `media_id`, `author_id` | IDs numéricos |
-| `post_published_at` | fecha **inferida**, decodificada del media ID |
+| `width`, `height` | real dimensions |
+| `alt_text` | `accessibility_caption` (Instagram alt-text) |
+| `carousel_count`, `carousel_shortcodes` | carousel slides |
+| `media_id`, `author_id` | numeric IDs |
+| `post_published_at` | **inferred** date, decoded from the media ID |
 
-Con esto se vuelve calculable el **engagement rate** `(likes+comentarios)/seguidores`,
-que es la métrica más útil para ranking de influencers.
+This makes the **engagement rate** `(likes+comments)/followers` computable, which is
+the most useful metric for influencer ranking.
 
-### Cobertura: 83% del metadata enriquecido, 100% de la fecha
+### Coverage: 83% of the enriched metadata, 100% of the date
 
-Medido sobre 12 posts reales: **10 de 12 traen el blob**. Los 2 que no,
-Instagram los sirve como `isRichEmbed: false` con `contextJSON: null`.
+Measured on 12 real posts: **10 of 12 carry the blob**. The 2 that don't, Instagram
+serves as `isRichEmbed: false` with `contextJSON: null`.
 
-**No es transitorio**: se reintentó 4 veces cada uno y nunca apareció, y ninguna
-variante de URL lo recupera (`/embed/` sin `/captioned/`, con `?img_index=1`).
-El endpoint `?__a=1&__d=dis` ahora devuelve 404. Por eso los campos quedan en
-`null` y no se reintenta: `rich_metadata: false` marca el caso.
+**It is not transient**: each was retried 4 times and it never appeared, and no URL
+variant recovers it (`/embed/` without `/captioned/`, with `?img_index=1`). The
+`?__a=1&__d=dis` endpoint now returns 404. That is why the fields stay `null` and
+are not retried: `rich_metadata: false` marks the case.
 
-### La fecha: decodificada del snowflake, no oficial
+### The date: decoded from the snowflake, not official
 
 ```
 media_id   = base64url(shortcode)
 epoch_ms   = (media_id >> 23) + 1314220021721
 ```
 
-Dos validaciones independientes:
+Two independent validations:
 
-- El ID derivado del shortcode coincide **exacto** con el `id` que trae el blob.
-- Captions que declaran su propio mes/año aciertan: *"Running shoes dropping in
+- The ID derived from the shortcode matches **exactly** the `id` the blob carries.
+- Captions that declare their own month/year hit: *"Running shoes dropping in
   August 2026"* → `2026-08-01`; *"in March 2026"* → `2026-03-01`; *"guide to
   running shoes in 2026"* → `2026-05-09`.
 
-Cubre el **100%** de los posts, porque depende sólo del shortcode, que siempre se
-conoce. Se marca `post_published_at_inferred: true`: es exacto, pero es un decode
-del esquema de IDs, no un campo que Instagram exponga.
+Covers **100%** of posts, because it only depends on the shortcode, which is always
+known. It is marked `post_published_at_inferred: true`: it is exact, but it is a
+decode of the ID scheme, not a field Instagram exposes.
 
-### Lo que sigue sin obtenerse
+### What still cannot be obtained
 
-`taken_at` oficial, **vistas de video**, guardados y listas de seguidores. No
-están en ninguna variante del embed. Requerirían la Graph API de Meta con una
-Business Account, es decir login y permisos.
+Official `taken_at`, **video view counts**, saves and follower lists. They are not
+in any variant of the embed. They would require Meta's Graph API with a Business
+Account, meaning login and permissions.
 
-> Hueco sin cerrar: no se llegó a probar un **reel** para confirmar si los videos
-> traen campos extra (duración, vistas) además de los comunes. Google empezó a
-> devolver 429 durante la investigación y no se quiso seguir castigándolo.
+> Open gap: a **reel** was never tested to confirm whether videos carry extra fields
+> (duration, views) beyond the common ones. Google started returning 429 during the
+> investigation and it was not worth punishing it further.
 
 ## Tests
 
 ```bash
-python test_ig_google.py    # 75 checks, sin red
+python test_ig_google.py    # 75 checks, no network
 ```
 
-Cubren idempotencia del discovery, estados del store, supervivencia a un corte
-sin `close()`, política de reintentos (incluido que 404 no se reintenta y que
-`Retry-After` se acota), parsing de `Retry-After`, clasificación de errores HTTP,
-espaciado del rate limiter bajo concurrencia, escritura concurrente en SQLite
-(200 posts x 8 hilos, sin corromper), saneo de la cola de keywords,
-clasificación de fallos del discovery (429 / captcha / shell JS como hechos
-distintos), detección de formato de imagen, extracción del `contextJSON`
-(incluyendo escapes y embed liviano) y decode de la fecha por snowflake validado
-contra captions reales.
+They cover discovery idempotency, store states, survival of an interruption
+without `close()`, retry policy (including that 404 is not retried and that
+`Retry-After` is capped), `Retry-After` parsing, HTTP error classification, rate
+limiter spacing under concurrency, concurrent SQLite writes (200 posts x 8 threads,
+without corruption), keyword queue sanitization, discovery failure classification
+(429 / captcha / JS shell as *distinct* facts), image format detection, `contextJSON`
+extraction (including escapes and the lightweight embed) and snowflake date decode
+validated against real captions.
 
-## Hallazgos sobre el HTML actual de Instagram
+## Findings about Instagram's current HTML
 
-Verificados empíricamente, no asumidos:
+Verified empirically, not assumed:
 
-1. **No hay `og:*`, ni JSON-LD, ni `<time>`.** El parseo debe apoyarse en clases CSS.
-   Por eso `scraped_at` (momento de la extracción) es el timestamp fiable, y la fecha
-   de publicación real **ya no está disponible** en el embed.
-2. **La foto del post es `img.EmbeddedMediaImage`.** El avatar del autor *también* es un
-   `<img>` (sin clase, `alt="{username}"`, con el segmento CDN `t51.2885-19`). Tomar el
-   primer `<img>` produce fotos de 40×40 en vez del post.
-3. **Soft-404.** Para shortcodes inexistentes, privados o eliminados, Instagram devuelve
-   **200** (no 404) con el aviso *"The link to this photo or video may be broken"*.
-   Se detecta en `is_unavailable()` para no registrar posts fantasma con campos nulos.
-4. **Falso positivo `en_US`.** Los blobs de configuración del cliente
-   (`{"IntlCurrentLocale",[],"code":"en_US"}`) producen un "shortcode" espurio.
-   `is_plausible_shortcode()` lo filtra por longitud, alfabeto y forma de locale.
-5. **Sólo ~12-14 posts por hashtag.** La página pública no pagina: `?page=2` devuelve el
-   mismo grid. Un `--limit` alto se avisa por log pero no es alcanzable por esta vía.
-6. **La página del hashtag se sirve de forma intermitente.** Instagram devuelve a veces una
-   "página shell" genérica (`<title>Instagram</title>`, ~490 KB, cero anclas) incluso para
-   hashtags válidos y enormes: se comprobó que **`#moda` devolvió 12 posts en una corrida y
-   0 en la siguiente**. Por eso la Fase 1 reintenta hasta 3 veces ante un resultado vacío;
-   un solo intento convertiría ese falso negativo en un error definitivo. El log incluye el
-   `<title>` y el tamaño de cada intento para que el diagnóstico sea verificable.
+1. **No `og:*`, no JSON-LD, no `<time>`.** Parsing must rely on CSS classes. That is
+   why `scraped_at` (the moment of extraction) is the reliable timestamp, and the real
+   publication date **is no longer available** in the embed.
+2. **The post photo is `img.EmbeddedMediaImage`.** The author's avatar *is also* an
+   `<img>` (no class, `alt="{username}"`, with CDN segment `t51.2885-19`). Taking the
+   first `<img>` yields 40×40 photos instead of the post.
+3. **Soft-404.** For nonexistent, private or deleted shortcodes, Instagram returns
+   **200** (not 404) with the notice *"The link to this photo or video may be broken"*.
+   It is detected in `is_unavailable()` so ghost posts with null fields are not recorded.
+4. **`en_US` false positive.** Client config blobs
+   (`{"IntlCurrentLocale",[],"code":"en_US"}`) produce a spurious "shortcode".
+   `is_plausible_shortcode()` filters it by length, alphabet and locale shape.
+5. **Only ~12-14 posts per hashtag.** The public page does not paginate: `?page=2`
+   returns the same grid. A high `--limit` is warned about in the log but is not
+   reachable through this path.
+6. **The hashtag page is served intermittently.** Instagram sometimes returns a generic
+   "shell page" (`<title>Instagram</title>`, ~490 KB, zero anchors) even for valid and
+   huge hashtags: it was verified that **`#moda` returned 12 posts in one run and 0 in
+   the next**. That is why Phase 1 retries up to 3 times on an empty result; a single
+   attempt would turn that false negative into a definitive error. The log includes
+   the `<title>` and size of each attempt so the diagnosis is verifiable.
 
-## Etiquetas sin grid público
+## Tags without a public grid
 
-No todas las etiquetas tienen contenido en la vista pública, y eso **no es un bug del
-script**. Verificado con `#ropa`: devuelve consistentemente la página shell, sin posts,
-tras 3 intentos —mientras `#moda`, `#vestimenta` y `#fashion` devuelven 12 cada una.
-Curiosamente, una etiqueta inventada como `#ropaaa` devolvió 8 posts: el grid responde a
-la popularidad del trending, no a la existencia o validez de la etiqueta.
+Not every tag has content in the public view, and that is **not a script bug**.
+Verified with `#ropa`: it consistently returns the shell page, no posts, after 3
+attempts —while `#moda`, `#vestimenta` and `#fashion` return 12 each. Curiously, an
+invented tag like `#ropaaa` returned 8 posts: the grid responds to trending
+popularity, not to the existence or validity of the tag.
 
-Si una etiqueta devuelve 0, el log lo distingue de forma explícita de un fallo.
+If a tag returns 0, the log distinguishes it explicitly from a failure.
 
-## Limitaciones
+Measured across 20 consecutive tags: 15 returned a grid (75%), 5 returned nothing.
+Expect roughly that hit rate when planning tag lists.
 
-- **No hay paginación:** ~12-14 posts por hashtag. Es el techo duro del método público.
-- **Sólo contenido destacado/popular** de la etiqueta, no el feed cronológico completo.
-- **`post_published_at` es inferido, no real.** Con `--decode-post-time` se decodifica el
-  snowflake del shortcode; se marca `post_published_at_inferred: true`. No debe usarse
-  como fecha de publicación verificada.
-- **Los reels** entregan su frame de portada vía CDN; el MP4 requiere otra ruta.
-- **Bloqueo por IP:** tras volumen alto Instagram responde 429. El script lo maneja con
-  backoff exponencial y respetando `Retry-After`, y **detiene** la ejecución si el 429
-  persiste. Para scraping sostenido hace falta rotación de proxies.
-- El script es secuencial con retardos de 1.5–3.5 s a propósito: imita tráfico humano.
-  Meter concurrencia asyncio anularía esa protección.
+## Limitations
 
-## Uso responsable
+- **No pagination:** ~12-14 posts per hashtag. This is the hard ceiling of the public
+  method. To scale, use more tags (breadth), not a higher limit.
+- **Only featured/popular content** from the tag, not the full chronological feed.
+- **`post_published_at` is inferred, not real.** With `--decode-post-time` the
+  shortcode snowflake is decoded; it is marked `post_published_at_inferred: true`. It
+  must not be used as a verified publication date.
+- **Reels** deliver their cover frame via CDN; the MP4 requires another path.
+- **IP blocking:** after high volume Instagram responds 429. The script handles it
+  with exponential backoff while respecting `Retry-After`, and **stops** execution if
+  the 429 persists. Sustained scraping requires proxy rotation.
+- The Google script is sequential with delays of 1.5–3.5 s on purpose: it mimics human
+  traffic. Adding asyncio concurrency would void that protection.
 
-Sólo contenido público, con ritmo limitado. Verificá los Términos de Uso de Instagram y
-la normativa aplicable a tu caso antes de escalar volumen.
+## Responsible use
+
+Public content only, at a limited pace. Check Instagram's Terms of Use and the
+regulations applicable to your case before scaling volume.
+
+---
+
+## Further reading
+
+| Document | What it covers |
+|---|---|
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Code map and orientation for another LLM; verified findings; **known bugs** |
+| [`CAPTCHA-RESEARCH.md`](./CAPTCHA-RESEARCH.md) | Benchmark of 6 search engines; why none replaces Google |
+| [`BREADTH-SOLUTION.md`](./BREADTH-SOLUTION.md) | The CAPTCHA-free hashtag-breadth strategy and how to scale it |
