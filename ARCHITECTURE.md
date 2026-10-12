@@ -50,21 +50,21 @@ out: `websockets` (only for `--interactive`), `httpx[socks]` (SOCKS5 proxy).
 
 ```
                     ┌─────────────────────────────────────────┐
-   --query ────────►│ PHASE 1 — DISCOVERY (Google)           │
+   --query ────────►│ PHASE 1 — DISCOVERY (Google)            │
                     │  rotates dorks × pages (start=0,100,200)│
                     │  extracts shortcodes from the SERP      │
                     └──────────────────┬──────────────────────┘
                                        │  dict[shortcode → serp_url]
                     ┌──────────────────▼──────────────────────┐
                     │ PHASE 2 — EMBED (Instagram, no auth)    │
-                    │  GET /p/{code}/embed/captioned/        │
-                    │  parses DOM + GraphQL contextJSON blob │
+                    │  GET /p/{code}/embed/captioned/         │
+                    │  parses DOM + GraphQL contextJSON blob  │
                     └──────────────────┬──────────────────────┘
                                        │
                     ┌──────────────────▼──────────────────────┐
-                    │ PHASE 3 — PERSISTENCE                  │
-                    │  downloads image + mark_ok() in SQLite│
-                    │  (autocommit per post)                 │
+                    │ PHASE 3 — PERSISTENCE                   │
+                    │  downloads image + mark_ok() in SQLite  │
+                    │  (autocommit per post)                  │
                     └──────────────────┬──────────────────────┘
                                        │
                               metadata.json (rebuilt from the DB)
