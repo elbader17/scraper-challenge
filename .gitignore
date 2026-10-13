@@ -1,4 +1,4 @@
-# Entorno virtual
+# Virtual environments
 .venv/
 venv/
 env/
@@ -11,20 +11,24 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Artefactos de scraping: son datos, no código.
-# El contenido scraped es de terceros (Instagram) y las corridas son reproducibles
-# con los scripts; versionarlas solo agrega ruido y volumen al repo.
+# Scraping artifacts: they are data, not code.
+# The scraped content belongs to third parties (Instagram) and the runs are
+# reproducible with the scripts, so versioning them only adds noise and bulk.
 output/
 downloads/
+# Local test runs (third-party images, ~20 MB per batch).
+# `output/` and `downloads/` are root-owned and cannot be written to without
+# sudo, so local runs go to `data/`.
+data/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
 
-# Perfil persistente de Chrome del bootstrap de CAPTCHA.
-# Puede contener cookies de sesión: nunca debe commitearse.
+# Persistent Chrome profile from the CAPTCHA bootstrap.
+# It may contain session cookies: it must never be committed.
 .ig_google_profile/
 
-# Secretos y configuración local
+# Secrets and local configuration
 .env
 .env.*
 *.pem
