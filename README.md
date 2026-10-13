@@ -420,3 +420,4 @@ regulations applicable to your case before scaling volume.
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Code map and orientation for another LLM; verified findings; **fixed-bug post-mortems** |
 | [`CAPTCHA-RESEARCH.md`](./CAPTCHA-RESEARCH.md) | Benchmark of 6 search engines; why none replaces Google |
 | [`BREADTH-SOLUTION.md`](./BREADTH-SOLUTION.md) | The CAPTCHA-free hashtag-breadth strategy and how to scale it |
+| [`INFRASTRUCTURE.md`](./INFRASTRUCTURE.md) | Target infrastructure (Postgres + S3), measured evidence, and the Snowflake evaluation |
