@@ -86,6 +86,7 @@ from ig_google_scraper import (
 )
 from ig_store_base import BaseStore
 from ig_store_factory import make_store
+from ig_objectstore import make_object_store
 
 LOG: logging.Logger = logging.getLogger("breadth")
 
@@ -265,16 +266,19 @@ class BreadthProcessor:
     """
 
     def __init__(self, store: BaseStore, out_dir: Path, args: argparse.Namespace,
-                 limiter: RateLimiter) -> None:
+                 limiter: RateLimiter,
+                 objects: Any = None) -> None:
         self.store = store
         self.out_dir = out_dir
         self.args = args
         self.limiter = limiter
+        self.objects = objects          # ig_objectstore.ObjectStore or None
         self._tls = threading.local()
         self._clients: list[Any] = []
         self._clients_lock = threading.Lock()
         self._stats_lock = threading.Lock()
-        self._stats = {"ok": 0, "unavailable": 0, "failed": 0, "images": 0}
+        self._stats = {"ok": 0, "unavailable": 0, "failed": 0, "images": 0,
+                       "uploads": 0, "uploads_skipped": 0, "uploads_failed": 0}
 
     def _new_client(self) -> Any:
         # Se reutiliza `build_client` del embed scraper en vez de construir la
@@ -353,21 +357,57 @@ class BreadthProcessor:
             LOG.info("[%s] no disponible (privado/eliminado)", code)
             return None
 
-        # --- Fase 3: imagen + checkpoint ---
+        # --- Phase 3: image + checkpoint ---
         self.limiter.acquire()
         saved = download_image(client, self.out_dir, post, a.overwrite)
         if saved:
             self.bump("images")
+
+        extra = post.model_dump()
+        self._upload(post, extra)
 
         self.store.mark_ok(
             code, query=tag, author=post.author, caption=post.caption,
             image_url=post.image_url, local_image_path=post.local_image_path,
             is_video=post.is_video, source_serp_url=f"hashtag://{tag}",
             scraped_at=post.scraped_at.isoformat(), attempts=a.retries,
-            extra=post.model_dump(),
+            extra=extra,
         )
         self.bump("ok")
         return post
+
+    def _upload(self, post: InstagramPost, extra: dict[str, Any]) -> None:
+        """Pushes the image to the object store and records its coordinates.
+
+        The bytes are read back from disk rather than kept in memory, so the
+        pipeline never holds more than one image at a time. A failure here is
+        logged and counted but does NOT fail the post: the metadata is the
+        valuable part, and `s3_key IS NULL` identifies what still needs
+        uploading, which a later run can finish.
+        """
+        store = self.objects
+        if store is None or not post.local_image_path:
+            return
+        path = Path(post.local_image_path)
+        if not path.exists():
+            return
+        try:
+            data = path.read_bytes()
+            obj = store.put_image(post.shortcode, data, path.suffix.lstrip("."))
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("[%s] object store upload failed: %s", post.shortcode, exc)
+            self.bump("uploads_failed")
+            return
+        if obj is None:
+            self.bump("uploads_failed")
+            return
+        extra["s3_key"] = obj.key
+        extra["image_sha256"] = obj.sha256
+        extra["image_bytes"] = obj.size
+        if obj.skipped:
+            self.bump("uploads_skipped")
+        else:
+            self.bump("uploads")
 
 
 # --------------------------------------------------------------------------- #
@@ -467,7 +507,14 @@ def run(args: argparse.Namespace) -> int:
         LOG.info("Claimed %d posts for this process (atomic)", total)
 
         limiter = RateLimiter(args.rate)
-        proc = BreadthProcessor(store, out_dir, args, limiter)
+        objects = make_object_store(
+            backend=getattr(args, "object_store", None),
+            root=getattr(args, "object_store_root", None),
+            bucket=getattr(args, "s3_bucket", None),
+            endpoint=getattr(args, "s3_endpoint", None))
+        if objects is not None:
+            LOG.info("Object store: %s", objects.stats())
+        proc = BreadthProcessor(store, out_dir, args, limiter, objects)
         LOG.info("Fase 2/3: %d posts, %d worker(s), %.2fs entre requests",
                  total, args.workers, args.rate)
 
@@ -530,6 +577,12 @@ def run(args: argparse.Namespace) -> int:
                 "media_id": r["media_id"], "width": r["width"], "height": r["height"],
                 "alt_text": r["alt_text"],
                 "carousel_count": r["carousel_count"] or 0,
+                "s3_key": r["s3_key"],
+                "image_sha256": r["image_sha256"],
+                "image_bytes": r["image_bytes"],
+                "image_url_stored": (objects.url(r["s3_key"])
+                                     if (objects is not None and r["s3_key"])
+                                     else None),
                 "post_published_at": r["post_published_at"],
                 "post_published_at_inferred": bool(r["post_published_at_inferred"]),
                 "rich_metadata": bool(r["rich_metadata"]),
@@ -566,8 +619,20 @@ def build_parser() -> argparse.ArgumentParser:
                         "(default <output-dir>/posts.sqlite3)")
     p.add_argument("--db-backend", choices=("sqlite", "postgres"),
                    default=None,
-                   help="Force a backend. Defaults to postgres when --db is a "
-                        "postgres:// URI or IG_POSTGRES_DSN is set")
+                   help="Force a database backend. Defaults to postgres when "
+                        "--db is a postgres:// URI or IG_POSTGRES_DSN is set")
+    # --- object storage (Phase 1) ---
+    p.add_argument("--object-store", choices=("s3", "local", "memory", "none"),
+                   default=None,
+                   help="Where images are uploaded. Defaults to s3 when "
+                        "IG_S3_BUCKET is set, local when IG_OBJECT_STORE_ROOT "
+                        "is set, otherwise disabled")
+    p.add_argument("--object-store-root", default=None,
+                   help="Directory for the local backend "
+                        "(default ./data/objects)")
+    p.add_argument("--s3-bucket", default=None, help="S3 bucket name")
+    p.add_argument("--s3-endpoint", default=None,
+                   help="S3-compatible endpoint (MinIO, Ceph, R2); omit for AWS")
     p.add_argument("--workers", type=int, default=4,
                    help="Workers concurrentes en la fase 2/3 (default 4)")
     p.add_argument("--rate", type=float, default=0.4,

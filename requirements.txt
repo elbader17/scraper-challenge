@@ -9,3 +9,16 @@ pydantic>=2.7           # validación de los modelos de datos (ig_serp, ig_googl
 
 # Opcional: soporte de proxy SOCKS5 en el respaldo httpx
 # httpx[socks]>=0.27
+# --- Infrastructure (Fases 0 and 1) -----------------------------------------
+# Both are OPTIONAL on purpose: with neither installed the project keeps
+# working exactly as before, on SQLite and with images left on disk.
+#
+# Postgres backend (needed for more than one scraper):
+#   psycopg2-binary>=2.9        # or psycopg[binary]>=3.2
+#
+# S3 backend (images -> object storage). Not needed for the local backend,
+# which has zero dependencies and mirrors the S3 key layout on disk:
+#   boto3>=1.34
+#
+# Test-only, to exercise the S3 code path without network or credentials:
+#   moto[s3]>=5.0

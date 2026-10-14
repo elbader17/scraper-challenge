@@ -307,7 +307,9 @@ class BaseStore:
             + ", carousel_shortcodes=" + self._ph(1)
             + ", post_published_at=" + self._ph(1)
             + ", post_published_at_inferred=" + self._ph(1)
-            + ", image_bytes=" + self._ph(1) + ", image_format=" + self._ph(1)
+            + ", s3_key=" + self._ph(1)
+            + ", image_bytes=" + self._ph(1) + ", image_sha256=" + self._ph(1)
+            + ", image_format=" + self._ph(1)
             + " WHERE shortcode=" + self._ph(1)),
             [STATUS_OK, query, author, caption, image_url, local_image_path,
              self._bool(is_video), source_serp_url, scraped_at, attempts,
@@ -320,7 +322,8 @@ class BaseStore:
              json.dumps(x.get("carousel_shortcodes") or [], ensure_ascii=False),
              x.get("post_published_at") and self._ts(x.get("post_published_at")),
              self._bool(x.get("post_published_at_inferred")),
-             x.get("image_bytes"), self._image_format(local_image_path),
+             x.get("s3_key"), x.get("image_bytes"), x.get("image_sha256"),
+             self._image_format(local_image_path),
              shortcode])
 
     def _image_format(self, local_image_path: Optional[str]) -> Optional[str]:

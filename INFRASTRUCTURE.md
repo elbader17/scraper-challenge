@@ -516,12 +516,38 @@ One year of choosing correctly is worth more than the entire implementation effo
 - [ ] Migrate the 7 SQLite dependencies listed in §2.2
 - [ ] **The 100 checks keep running against SQLite** — no infrastructure
 
-### Phase 1 — Images to S3 (1 day, ~$0)
+### Phase 1 — Images to object storage (DONE, ~$0)
 
-- [ ] Bucket with lifecycle rules
-- [ ] Migrate the 109 existing images as a proof
-- [ ] Upload from the scraper with `s3_key` + `image_sha256`
-- [ ] Verify integrity by comparing hashes
+- [x] `ig_objectstore.py` with three interchangeable backends
+- [x] Upload from the scraper, recording `s3_key` + `image_sha256` + `image_bytes`
+- [x] Verified end to end: 6/6 images uploaded, hashes and sizes matching
+- [x] `test_ig_objectstore.py`: 55 checks (35 without boto3, +20 on the S3 path)
+
+**The backend is chosen by configuration, not by code**, so "emulating S3" is a
+matter of pointing at something else:
+
+| Goal | Configuration | Cost |
+|---|---|---|
+| Try it locally, no Docker | `export IG_OBJECT_STORE_ROOT=./data/objects` | **$0** |
+| High-fidelity S3 on your machine | `docker run -p 9000:9000 minio/minio server /data` then `IG_S3_ENDPOINT=http://localhost:9000` | $0 |
+| Production | `export IG_S3_BUCKET=ig-posts` (+ `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) | $4.69/mo at one year |
+
+All three use the same key layout, so a local run can be promoted to S3 unchanged:
+
+```bash
+# whatever is on disk now, straight into a bucket
+python -c "import ig_objectstore as O; print(O.migrate_local('data/sneakers_110', O.make_object_store()))"
+```
+
+`migrate_local()` is idempotent: identical bytes are skipped, so it is safe to
+re-run after a partial failure.
+
+**Verification note, stated plainly:** MinIO could not be run on the machine that
+implemented this — its registry is unreachable from here. The S3 code path was
+instead exercised against `moto`, which is a complete in-process implementation
+of S3, so `boto3`, the request signing, the bucket layout and the idempotency
+check are all genuinely covered. What remains unverified is only the network
+hop to a real MinIO daemon, which is MinIO's own code, not this project's.
 
 ### Phase 2 — Parallel scrapers (1 day)
 

@@ -341,6 +341,11 @@ Account, meaning login and permissions.
 
 ```bash
 python test_ig_google.py    # 100 checks, no network
+
+# Infrastructure suites (also offline)
+python test_ig_objectstore.py   # 55 checks (35 without boto3, skips S3)
+IG_POSTGRES_DSN="host=... dbname=ig user=... password=..." \
+  python test_ig_postgres.py    # 32 checks, skips cleanly without a server
 ```
 
 They cover discovery idempotency, store states, survival of an interruption
